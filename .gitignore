@@ -1,0 +1,44 @@
+*.log
+.DS_Store
+.env
+.env.backup
+.env.production
+.phpactor.json
+.phpunit.result.cache
+/.codex
+/.cursor/
+/.idea
+/.nova
+/.phpunit.cache
+/.vscode
+/.zed
+/auth.json
+/node_modules
+/public/build
+/public/fonts-manifest.dev.json
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/vendor
+_ide_helper.php
+Homestead.json
+Homestead.yaml
+Thumbs.db
+
+# Database pengembangan — berisi data seed, bukan untuk dibagikan
+/database/*.sqlite
+/database/*.sqlite-journal
+/database/*.sqlite-shm
+/database/*.sqlite-wal
+
+# Berkas sementara hasil import/export
+/storage/app/imports
+/storage/app/private
+/storage/app/template-import-lembur.csv
+
+# Aset Filament — dipublikasikan ulang oleh `filament:upgrade` pada setiap
+# composer install (lihat post-autoload-dump), jadi tidak perlu ikut versi.
+/public/css/filament
+/public/js/filament
+/public/fonts/filament

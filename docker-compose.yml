@@ -1,0 +1,70 @@
+# LemburKu — stack VPS sesuai NFR §10.
+# Semua layanan berbagi image aplikasi yang sama; yang membedakan hanya perintahnya.
+
+x-app: &app
+  build:
+    context: .
+    target: runtime
+  env_file: [.env]
+  depends_on:
+    mysql: { condition: service_healthy }
+    redis: { condition: service_started }
+  volumes:
+    - storage:/var/www/html/storage
+  restart: unless-stopped
+
+services:
+  app:
+    <<: *app
+    # php-fpm; nginx yang meneruskan request ke sini.
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on: [app]
+    ports: ['${APP_PORT:-8080}:80']
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./public:/var/www/html/public:ro
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: '${DB_DATABASE:-lemburku}'
+      MYSQL_USER: '${DB_USERNAME:-lemburku}'
+      MYSQL_PASSWORD: '${DB_PASSWORD:-secret}'
+      MYSQL_ROOT_PASSWORD: '${DB_ROOT_PASSWORD:-secret}'
+    volumes:
+      - mysql:/var/lib/mysql
+      - ./docker/mysql/backup:/backup
+    healthcheck:
+      # Layanan lain menunggu ini sehat; tanpa healthcheck, worker start lebih
+      # dulu dan langsung mati karena database belum menerima koneksi.
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost', '-p${DB_ROOT_PASSWORD:-secret}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis:/data
+    restart: unless-stopped
+
+  queue:
+    <<: *app
+    # Export Excel dan pengiriman email dijalankan di sini.
+    command: php artisan queue:work --tries=3 --max-time=3600 --sleep=1
+
+  scheduler:
+    <<: *app
+    # Menjalankan jadwal di routes/console.php: pemeliharaan saldo 00:05 WIB
+    # dan reminder 08:00 WIB.
+    command: php artisan schedule:work
+
+volumes:
+  mysql:
+  redis:
+  storage:
