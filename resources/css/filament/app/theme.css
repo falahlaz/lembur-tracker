@@ -1,0 +1,17 @@
+/* Tema panel Filament.
+ *
+ * Filament 4 mengirim stylesheet yang hanya berisi kelas semantik `fi-*`; layer
+ * utility Tailwind yang dulu ada di v3 sudah tidak ikut. Theme.css vendor pun
+ * diawali `@import 'tailwindcss' source(none)`. Jadi tanpa berkas ini setiap
+ * kelas Tailwind di view kita — `flex`, `md:hidden`, `divide-y` — tidak pernah
+ * terkompilasi, dan tata letak ambruk tanpa satu pun error.
+ */
+
+@import '../../../../vendor/filament/filament/resources/css/theme.css';
+
+/* Stub bawaan hanya memindai `resources/views/filament/`. Kita perlu seluruh
+ * `resources/views` supaya komponen seperti `components/lembur/empty-state`
+ * ikut terbaca. */
+@source '../../../../app/Filament/**/*.php';
+@source '../../../../resources/views/**/*.blade.php';
+@source '../../../../storage/framework/views/*.php';

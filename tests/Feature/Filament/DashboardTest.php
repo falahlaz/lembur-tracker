@@ -10,6 +10,7 @@ use App\Filament\Widgets\RingkasanStats;
 use App\Filament\Widgets\TimelinePayroll;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
+use Livewire\Mechanisms\ComponentRegistry;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -112,5 +113,27 @@ class DashboardTest extends TestCase
             ->assertSee('Lembur 12 Maret 2026')
             ->assertSee('Klaim 1 April 2026')
             ->assertSee('libur 1 hari penuh');
+    }
+
+    /**
+     * Regresi — widget dashboard di-lazy-load, jadi browser memanggilnya lewat
+     * POST /livewire/update memakai NAMA komponen, bukan nama kelas. Kalau
+     * panel tidak mendaftarkan widget ke Livewire, nama itu tidak dikenal dan
+     * Livewire membalas 419 — user melihat "Halaman Kadaluwarsa" tepat setelah
+     * login. Livewire::test() di tes lain menerima kelas, jadi tidak menyentuh
+     * registry dan tidak akan menangkap ini.
+     */
+    #[Test]
+    public function semua_widget_dashboard_terdaftar_di_livewire(): void
+    {
+        $registry = app(ComponentRegistry::class);
+
+        foreach ((new Dashboard)->getWidgets() as $widget) {
+            $this->assertSame(
+                $widget,
+                $registry->getClass($registry->getName($widget)),
+                "Widget {$widget} belum terdaftar di Livewire; permintaan lazy-load-nya akan 419.",
+            );
+        }
     }
 }

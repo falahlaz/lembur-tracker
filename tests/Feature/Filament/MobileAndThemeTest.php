@@ -3,6 +3,7 @@
 namespace Tests\Feature\Filament;
 
 use App\Filament\Resources\OvertimeRecords\OvertimeRecordResource;
+use Filament\Facades\Filament;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -57,6 +58,34 @@ class MobileAndThemeTest extends TestCase
         $this->assertStringContainsString('--primary-500:oklch(0.585 0.233 277.117)', $html);
         // Filament menyiapkan kelas dark; temanya mengikuti preferensi sistem.
         $this->assertStringContainsString('dark', $html);
+    }
+
+    /**
+     * Regresi — Filament 4 hanya mengirim kelas semantik `fi-*`; layer utility
+     * Tailwind sudah tidak ikut, dan theme.css vendor memakai `source(none)`.
+     * Tanpa tema kustom, setiap kelas Tailwind di view kita tidak pernah
+     * terkompilasi: markup tetap render, tata letaknya saja yang hilang, tanpa
+     * satu pun error. Tes lain di kelas ini hanya memeriksa string kelas di
+     * HTML, jadi tidak akan menangkapnya.
+     */
+    #[Test]
+    public function panel_memakai_tema_kustom_agar_kelas_tailwind_terkompilasi(): void
+    {
+        $theme = resource_path('css/filament/app/theme.css');
+
+        $this->assertSame(
+            'resources/css/filament/app/theme.css',
+            Filament::getPanel('app')->getViteTheme(),
+        );
+        $this->assertFileExists($theme);
+
+        $css = file_get_contents($theme);
+
+        // Cakupannya harus seluruh resources/views, bukan hanya subfolder
+        // filament/ seperti stub bawaan — komponen di components/lembur ikut
+        // memakai utility.
+        $this->assertStringContainsString("@source '../../../../resources/views/**/*.blade.php';", $css);
+        $this->assertStringContainsString("@source '../../../../app/Filament/**/*.php';", $css);
     }
 
     #[Test]

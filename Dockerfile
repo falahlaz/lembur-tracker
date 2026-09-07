@@ -13,6 +13,9 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY . .
+# theme.css milik panel mengimpor dari vendor/filament, jadi tahap ini butuh
+# vendor juga — di build bersih (CI) direktori itu tidak ikut COPY . .
+COPY --from=vendor /app/vendor ./vendor
 RUN npm run build
 
 # ---------- Tahap 3: runtime ----------

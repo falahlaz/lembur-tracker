@@ -38,6 +38,10 @@ class AppPanelProvider extends PanelProvider
                 'gray' => Color::Slate,
             ])
             ->font('Inter')
+            // Filament 4 tidak lagi mengirim utility Tailwind, hanya kelas
+            // `fi-*`. Tanpa tema ini setiap kelas di view kita mati diam-diam:
+            // markup tetap render, tata letaknya saja yang hilang.
+            ->viteTheme('resources/css/filament/app/theme.css')
             ->defaultThemeMode(ThemeMode::System)
             ->navigationGroups([
                 NavigationGroup::make()->label('Beranda'),
@@ -49,7 +53,11 @@ class AppPanelProvider extends PanelProvider
             ->pages([
                 Dashboard::class,
             ])
-            ->widgets([])
+            // Registrasi (bukan urutan): Filament hanya mendaftarkan widget ke
+            // Livewire lewat panel. Tanpa ini, widget tetap ter-render tapi
+            // permintaan lazy-load-nya balik 419 "Halaman Kadaluwarsa".
+            // Urutan tampilnya tetap ditentukan Dashboard::getWidgets().
+            ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
             // Design Brief §7 — bottom bar mobile; disuntik lewat render hook
             // agar berlaku di seluruh halaman panel tanpa mengubah layout.
             ->renderHook(
