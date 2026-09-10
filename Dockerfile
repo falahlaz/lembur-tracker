@@ -5,7 +5,7 @@ FROM composer:2.8 AS vendor
 WORKDIR /app
 COPY composer.json composer.lock ./
 # Script di-skip: artisan belum ada di tahap ini.
-RUN composer install --no-dev --no-scripts --prefer-dist --no-interaction --no-progress
+RUN composer install --no-dev --no-scripts --prefer-dist --no-interaction --no-progress --ignore-platform-reqs
 
 # ---------- Tahap 2: aset frontend ----------
 FROM node:22-alpine AS assets
@@ -22,6 +22,7 @@ RUN npm run build
 FROM php:8.4-fpm-alpine AS runtime
 
 RUN apk add --no-cache \
+        icu-libs libzip \
         icu-dev oniguruma-dev libzip-dev libpng-dev freetype-dev libjpeg-turbo-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j"$(nproc)" pdo_mysql bcmath intl zip gd opcache \
@@ -32,7 +33,16 @@ COPY docker/php/php.ini /usr/local/etc/php/conf.d/99-lemburku.ini
 WORKDIR /var/www/html
 
 COPY --from=vendor /app/vendor ./vendor
-COPY . .
+COPY app ./app
+COPY bootstrap ./bootstrap
+COPY config ./config
+COPY database ./database
+COPY lang ./lang
+COPY public ./public
+COPY resources ./resources
+COPY routes ./routes
+COPY storage ./storage
+COPY artisan composer.json ./
 COPY --from=assets /app/public/build ./public/build
 
 # Peran writer dipisah dari root supaya proses PHP tidak berjalan sebagai root.
