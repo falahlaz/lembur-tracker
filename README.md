@@ -109,6 +109,19 @@ docker compose exec app php artisan migrate --seed
 
 Aplikasi ada di `http://localhost:8080/app` (ubah lewat `APP_PORT`).
 
+Sekali cek setelah `up`, karena kegagalannya tidak kelihatan dari tampilan:
+
+```bash
+curl -I http://localhost:8080/livewire/livewire.js   # harus 200
+```
+
+Livewire menyajikan JS-nya lewat route, bukan berkas di `public/`. Kalau
+nginx menjawab 404 di sini, CSS tetap termuat sehingga halaman *terlihat*
+normal, tetapi Livewire dan Alpine tidak pernah jalan: tombol tidak bereaksi,
+form login hanya me-reload halaman, dan input password tampil sebagai teks
+terang. Jangan menambahkan blok `location` regex `\.(css|js)$` tanpa
+`try_files` — itu persis yang menjegal route ini.
+
 `DB_USERNAME`, `DB_PASSWORD`, dan `DB_DATABASE` hanya dipakai MySQL saat volume
 dibuat pertama kali. Mengubahnya setelah itu tidak berpengaruh sampai
 `docker compose down -v` — dan itu menghapus seluruh data.
@@ -160,7 +173,7 @@ tanpa merender satu pun halaman.
 php artisan test
 ```
 
-122 test, 493 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
+127 test, 520 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
 
 ```bash
 php artisan test --filter=br_13     # clamping akhir bulan

@@ -15,3 +15,15 @@
 @source '../../../../app/Filament/**/*.php';
 @source '../../../../resources/views/**/*.blade.php';
 @source '../../../../storage/framework/views/*.php';
+
+/* Input password `revealable` Filament tidak punya atribut `type` statis —
+ * tipenya hanya diikat lewat Alpine (`x-bind:type="isPasswordRevealed ? 'text'
+ * : 'password'"`). Input tanpa `type` diperlakukan browser sebagai `text`,
+ * jadi selama Alpine belum boot — atau gagal dimuat sama sekali — kata sandi
+ * tampil sebagai teks terang. Aturan ini menyamarkannya tanpa bergantung pada
+ * JavaScript; begitu Alpine memasang `type`, selektor `:not([type])` berhenti
+ * cocok dan aturan ini tidak lagi berpengaruh. */
+.fi-input.fi-revealable:not([type]) {
+    -webkit-text-security: disc;
+    text-security: disc;
+}
