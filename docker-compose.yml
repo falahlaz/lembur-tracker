@@ -19,12 +19,16 @@ services:
     # php-fpm; nginx yang meneruskan request ke sini.
 
   nginx:
-    image: nginx:1.27-alpine
+    # Dibangun, bukan image polos: public/ harus berisi aset hasil build
+    # (public/build dari Vite, public/css/filament) yang tidak ada di checkout.
+    build:
+      context: .
+      target: web
     depends_on: [app]
     ports: ['${APP_PORT:-8080}:80']
     volumes:
+      # Hanya konfigurasi yang di-bind, supaya perubahannya cukup restart.
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./public:/var/www/html/public:ro
     restart: unless-stopped
 
   mysql:

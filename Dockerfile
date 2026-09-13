@@ -45,11 +45,25 @@ COPY storage ./storage
 COPY artisan composer.json ./
 COPY --from=assets /app/public/build ./public/build
 
-# Peran writer dipisah dari root supaya proses PHP tidak berjalan sebagai root.
-RUN chown -R www-data:www-data storage bootstrap/cache \
-    && php artisan package:discover --ansi
+# filament:upgrade menerbitkan aset Filament ke public/css/filament dan
+# public/js/filament. Tahap vendor memakai --no-scripts, jadi post-autoload-dump
+# tidak pernah jalan — tanpa baris ini panel tampil tanpa CSS.
+# chown: peran writer dipisah dari root supaya proses PHP tidak berjalan
+# sebagai root.
+RUN php artisan package:discover --ansi \
+    && php artisan filament:upgrade \
+    && chown -R www-data:www-data storage bootstrap/cache
 
 USER www-data
 
 EXPOSE 9000
 CMD ["php-fpm"]
+
+# ---------- Tahap 4: web ----------
+# public/ ikut ke dalam image nginx, bukan di-bind dari host: aset Vite
+# (public/build) dan aset Filament dibuat saat build dan tidak ada di checkout,
+# jadi bind mount ./public membuat seluruh CSS/JS 404.
+FROM nginx:1.27-alpine AS web
+
+COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY --from=runtime /var/www/html/public /var/www/html/public

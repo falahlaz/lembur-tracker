@@ -58,14 +58,60 @@ sebagai email sungguhan, jalankan Mailpit dan set `MAIL_MAILER=smtp`,
 
 ## Menjalankan dengan Docker
 
+`.env` tinggal di host dan dibaca container lewat `env_file` — berkasnya
+sengaja **tidak** ikut masuk image (lihat `.dockerignore`). Karena itu semua
+penyetelan, termasuk `APP_KEY`, dikerjakan di host sebelum `up`.
+
 ```bash
-cp .env.example .env          # set DB_CONNECTION=mysql, DB_HOST=mysql
+cp .env.example .env
+```
+
+Sunting `.env`:
+
+```ini
+APP_URL=http://localhost:8080
+DB_CONNECTION=mysql
+DB_HOST=mysql
+DB_PORT=3306
+DB_DATABASE=lemburku
+DB_USERNAME=lemburku
+DB_PASSWORD=secret
+REDIS_HOST=redis
+REDIS_CLIENT=predis
+```
+
+`REDIS_CLIENT=predis` bukan pilihan gaya: image runtime tidak memasang ekstensi
+`phpredis`, sedangkan `predis/predis` sudah ikut di `composer.json`.
+
+Isi `APP_KEY` — inilah yang dilakukan `artisan key:generate`, hanya saja
+perintah itu menulis ke berkas `.env`, jadi harus dijalankan di host:
+
+```bash
+sed -i "s|^APP_KEY=.*|APP_KEY=base64:$(openssl rand -base64 32)|" .env
+```
+
+Tanpa `openssl` di host, minta container yang menghitungkan — `--show` hanya
+mencetak kunci, tidak menulis berkas — lalu salin hasilnya ke `.env`:
+
+```bash
+docker compose run --rm --no-deps app php artisan key:generate --show
+```
+
+Menjalankan `docker compose exec app php artisan key:generate` tanpa `--show`
+akan gagal dengan `file_get_contents(/var/www/html/.env): No such file or
+directory`, dan itu memang seharusnya: kunci yang ditulis di dalam container
+ikut hilang begitu container diganti.
+
+```bash
 docker compose up -d --build
-docker compose exec app php artisan key:generate
 docker compose exec app php artisan migrate --seed
 ```
 
 Aplikasi ada di `http://localhost:8080/app` (ubah lewat `APP_PORT`).
+
+`DB_USERNAME`, `DB_PASSWORD`, dan `DB_DATABASE` hanya dipakai MySQL saat volume
+dibuat pertama kali. Mengubahnya setelah itu tidak berpengaruh sampai
+`docker compose down -v` — dan itu menghapus seluruh data.
 
 Stack: nginx · php-fpm · mysql 8.4 · redis · queue worker · scheduler.
 Backup harian: pasang `docker/backup.sh` di crontab host (retensi 30 hari).
