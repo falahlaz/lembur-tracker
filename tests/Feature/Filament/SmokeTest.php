@@ -6,7 +6,11 @@ use App\Enums\ClaimType;
 use App\Filament\Pages\CutiPengganti;
 use App\Filament\Resources\LeaveClaims\LeaveClaimResource;
 use App\Filament\Resources\OvertimeRecords\OvertimeRecordResource;
+use App\Models\User;
+use Database\Seeders\DemoUserSeeder;
+use Filament\Auth\Pages\Login;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
@@ -58,6 +62,65 @@ class SmokeTest extends TestCase
         $user->update(['is_active' => false]);
 
         $this->actingAs($user)->get('/app')->assertForbidden();
+    }
+
+    /**
+     * Kredensial yang ditulis di README dan dipakai saat demo harus benar-benar
+     * bisa masuk. Seeder menyimpan password sebagai teks biasa dan bergantung
+     * sepenuhnya pada cast `password => hashed` di model; kalau cast itu hilang,
+     * hash tidak pernah terbentuk dan seluruh akun demo terkunci tanpa satu pun
+     * error yang kelihatan.
+     */
+    #[Test]
+    public function kredensial_seeder_bisa_masuk(): void
+    {
+        $this->seed(DemoUserSeeder::class);
+
+        Livewire::test(Login::class)
+            ->fillForm([
+                'email' => 'falah@lemburku.test',
+                'password' => 'password',
+            ])
+            ->call('authenticate')
+            ->assertHasNoFormErrors();
+
+        $this->assertAuthenticatedAs(
+            User::query()->where('email', 'falah@lemburku.test')->sole(),
+        );
+    }
+
+    #[Test]
+    public function password_salah_tidak_bisa_masuk(): void
+    {
+        $this->seed(DemoUserSeeder::class);
+
+        Livewire::test(Login::class)
+            ->fillForm([
+                'email' => 'falah@lemburku.test',
+                'password' => 'bukan-password-yang-benar',
+            ])
+            ->call('authenticate')
+            ->assertHasFormErrors(['email']);
+
+        $this->assertGuest();
+    }
+
+    #[Test]
+    public function user_nonaktif_ditolak_di_halaman_login(): void
+    {
+        // F-01 — dicek di pintu masuk, bukan hanya saat membuka /app.
+        $this->seed(DemoUserSeeder::class);
+        User::query()->where('email', 'falah@lemburku.test')->update(['is_active' => false]);
+
+        Livewire::test(Login::class)
+            ->fillForm([
+                'email' => 'falah@lemburku.test',
+                'password' => 'password',
+            ])
+            ->call('authenticate')
+            ->assertHasFormErrors(['email']);
+
+        $this->assertGuest();
     }
 
     #[Test]
