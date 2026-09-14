@@ -42,6 +42,7 @@ class OvertimeRecordObserver
         // Kimai, record itu dikunci dari sync selamanya. Ditentukan SEBELUM durasi
         // dihitung, karena rawMinutes() membaca flag ini.
         $this->markLocallyModified($record);
+        $this->clearEvidenceFlag($record);
 
         $raw = $record->rawMinutes();
         $rounding = (bool) ($record->user?->rounding_enabled ?? false);
@@ -57,6 +58,26 @@ class OvertimeRecordObserver
 
         $record->rule_version_id = $rule->id;
         $record->payroll_period_id = $this->periods->resolve($date, $rule)->id;
+    }
+
+    /**
+     * SY-12 — badge "Lengkapi evidence" padam begitu user benar-benar mengganti
+     * URL-nya. Diikatkan pada perubahan nilai, bukan pada aksi menyimpan, supaya
+     * menyimpan form tanpa menyentuh evidence tidak diam-diam membuka kunci status.
+     */
+    private function clearEvidenceFlag(OvertimeRecord $record): void
+    {
+        if (! $record->exists || ! $record->evidence_needs_review) {
+            return;
+        }
+
+        if (KimaiSynchronizer::isSyncing()) {
+            return;
+        }
+
+        if ($record->isDirty('evidence_url') && filled($record->evidence_url)) {
+            $record->evidence_needs_review = false;
+        }
     }
 
     /**

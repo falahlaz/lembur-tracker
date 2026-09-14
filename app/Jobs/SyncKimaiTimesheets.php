@@ -49,11 +49,34 @@ class SyncKimaiTimesheets implements ShouldQueue
         return Cache::has(self::lockKey($user));
     }
 
+    /**
+     * Jendela antara "job sudah di-dispatch" dan "worker mengambilnya" tidak
+     * ditutupi kunci maupun baris sync_runs. Tanpa penanda ini, klik kedua di
+     * detik itu akan terlihat sah oleh UI — meski job keduanya nanti tetap
+     * ditolak kunci (SY-18), tombolnya sempat hidup dan membingungkan.
+     */
+    public static function markPending(User $user): void
+    {
+        Cache::put(self::pendingKey($user), true, 120);
+    }
+
+    public static function isPendingFor(User $user): bool
+    {
+        return Cache::has(self::pendingKey($user));
+    }
+
+    public static function pendingKey(User $user): string
+    {
+        return "kimai-sync-pending:{$user->id}";
+    }
+
     public function handle(KimaiSynchronizer $synchronizer, KimaiConnection $connection): void
     {
         if (! $this->user->hasKimaiConnection()) {
             return;
         }
+
+        Cache::forget(self::pendingKey($this->user));
 
         $lock = Cache::lock(self::lockKey($this->user), (int) config('kimai.lock_ttl'));
 
