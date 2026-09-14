@@ -8,6 +8,7 @@ use App\Enums\OvertimeStatus;
 use App\Enums\Role;
 use App\Models\OvertimeRecord;
 use App\Models\User;
+use App\Rules\EvidenceReviewedBeforeSubmission;
 use App\Rules\NoOverlappingOvertimeSession;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Radio;
@@ -111,6 +112,15 @@ class OvertimeRecordForm
                     ->visible(fn (Get $get) => filled($get('start_time')) && filled($get('end_time')))
                     ->columnSpanFull(),
 
+                // SY-10 — wajib terlihat bila > 0. Tanpa ini, record 19:00–23:00
+                // berdurasi 3 jam 30 menit terbaca seperti bug.
+                TextInput::make('break_minutes')
+                    ->label('Istirahat (menit)')
+                    ->numeric()
+                    ->minValue(0)
+                    ->visible(fn (?OvertimeRecord $record) => (int) ($record?->break_minutes ?? 0) > 0)
+                    ->helperText('Sudah dipotong dari durasi, sesuai catatan di Kimai.'),
+
                 Textarea::make('work_description')
                     ->label('Deskripsi pekerjaan')
                     ->rows(3)
@@ -122,15 +132,27 @@ class OvertimeRecordForm
                     ->label('URL evidence')
                     ->url()
                     ->required()
+                    ->live(debounce: 300)
                     ->maxLength(2048)
-                    ->helperText('Link SPL atau timesheet KIMAI di OneDrive kamu'),
+                    ->helperText(fn (?OvertimeRecord $record) => $record?->needsEvidenceReview()
+                        // SY-12 — dikatakan terus terang: link ini pengisi sementara.
+                        ? 'Sekarang masih berisi deep link Kimai. Ganti dengan link SPL atau '
+                            .'timesheet di OneDrive kamu sebelum mengajukan.'
+                        : 'Link SPL atau timesheet KIMAI di OneDrive kamu'),
 
                 Select::make('status')
                     ->label('Status')
                     ->options(OvertimeStatus::class)
                     ->default(OvertimeStatus::Recorded)
                     ->required()
-                    ->native(false),
+                    ->native(false)
+                    ->rules(fn (Get $get, ?OvertimeRecord $record) => [
+                        new EvidenceReviewedBeforeSubmission(
+                            needsReview: (bool) $record?->needsEvidenceReview(),
+                            evidenceUrl: $get('evidence_url'),
+                            placeholderUrl: $record?->getOriginal('evidence_url'),
+                        ),
+                    ]),
 
                 Textarea::make('notes')
                     ->label('Catatan')
@@ -153,6 +175,9 @@ class OvertimeRecordForm
             startTime: (string) $get('start_time'),
             endTime: (string) $get('end_time'),
             excludeRecordId: $record?->id,
+            // SY-10 — preview ikut memotong istirahat, supaya angkanya sama
+            // persis dengan yang akan tersimpan.
+            breakMinutes: (int) ($get('break_minutes') ?? $record?->break_minutes ?? 0),
         );
     }
 

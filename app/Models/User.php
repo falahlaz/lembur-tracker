@@ -18,7 +18,7 @@ use Illuminate\Notifications\Notifiable;
     'name', 'email', 'password', 'role', 'manager_id', 'is_active',
     'rounding_enabled', 'notification_prefs', 'default_late_arrival_time',
 ])]
-#[Hidden(['password', 'remember_token'])]
+#[Hidden(['password', 'remember_token', 'kimai_api_token'])]
 class User extends Authenticatable implements FilamentUser
 {
     /** @use HasFactory<UserFactory> */
@@ -33,6 +33,11 @@ class User extends Authenticatable implements FilamentUser
             'is_active' => 'boolean',
             'rounding_enabled' => 'boolean',
             'notification_prefs' => 'array',
+            // §9 — AES-256-CBC lewat APP_KEY. Tidak pernah disimpan plaintext.
+            'kimai_api_token' => 'encrypted',
+            'kimai_token_valid_at' => 'datetime',
+            'kimai_auto_sync' => 'boolean',
+            'kimai_synced_through' => 'immutable_date:Y-m-d',
         ];
     }
 
@@ -76,5 +81,24 @@ class User extends Authenticatable implements FilamentUser
     public function leaveClaims(): HasMany
     {
         return $this->hasMany(LeaveClaim::class);
+    }
+
+    public function syncRuns(): HasMany
+    {
+        return $this->hasMany(SyncRun::class);
+    }
+
+    /** F-12 — tombol sync hanya muncul bila API key sudah tersimpan. */
+    public function hasKimaiConnection(): bool
+    {
+        return filled($this->kimai_api_token);
+    }
+
+    /** F-11 — yang pernah ditampilkan kembali hanya 4 karakter terakhir. */
+    public function kimaiTokenMask(): ?string
+    {
+        return $this->kimai_token_last4 === null
+            ? null
+            : str_repeat('•', 12).$this->kimai_token_last4;
     }
 }

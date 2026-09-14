@@ -4,6 +4,7 @@ namespace App\Filament\Resources\OvertimeRecords\Tables;
 
 use App\Domain\Lembur\PayrollPeriodResolver;
 use App\Enums\OvertimeStatus;
+use App\Enums\Source;
 use App\Enums\Tier;
 use App\Models\OvertimeRecord;
 use App\Models\PayrollPeriod;
@@ -82,13 +83,47 @@ class OvertimeRecordsTable
                         ->label('Status')
                         ->badge()
                         ->grow(false),
+
+                    // SY-12 — penanda bahwa evidence-nya masih deep link Kimai.
+                    // Ditaruh di muka kartu, bukan di panel: kalau harus di-tap
+                    // dulu, ia tidak mencegah apa pun (SR-5).
+                    TextColumn::make('evidence_needs_review')
+                        ->label('Evidence')
+                        ->badge()
+                        ->color('warning')
+                        ->formatStateUsing(fn () => 'Lengkapi evidence')
+                        // State null bikin kolomnya kosong, jadi badge hanya muncul
+                        // pada record yang memang masih perlu dilengkapi.
+                        ->getStateUsing(fn (OvertimeRecord $r) => $r->evidence_needs_review ? 'perlu' : null)
+                        ->grow(false),
                 ])->from('sm'),
 
                 Panel::make([
                     Stack::make([
+                        TextColumn::make('source')
+                            ->label('Sumber')
+                            ->formatStateUsing(fn (OvertimeRecord $r) => $r->isFromKimai()
+                                ? 'Dari Kimai · timesheet #'.$r->kimai_timesheet_id
+                                    .($r->locally_modified ? ' (sudah diedit, tidak ikut sync lagi)' : '')
+                                : 'Dicatat manual')
+                            ->color('gray')
+                            ->size('sm'),
+
                         TextColumn::make('duration_raw_minutes')
                             ->label('Durasi mentah')
                             ->formatStateUsing(fn ($state) => 'Durasi mentah '.Format::durasi((int) $state))
+                            ->color('gray')
+                            ->size('sm'),
+
+                        // SY-10 — selisih jam dan durasi memang bisa berbeda; ini
+                        // yang menjelaskannya, dan hanya muncul bila relevan.
+                        TextColumn::make('break_minutes')
+                            ->label('Istirahat')
+                            // State null menyembunyikan barisnya per record; visible()
+                            // tidak bisa dipakai karena ia dievaluasi sekali untuk
+                            // seluruh tabel, tanpa record apa pun.
+                            ->getStateUsing(fn (OvertimeRecord $r) => (int) $r->break_minutes > 0 ? (int) $r->break_minutes : null)
+                            ->formatStateUsing(fn ($state) => 'Istirahat '.Format::durasi((int) $state).', sudah dipotong dari durasi')
                             ->color('gray')
                             ->size('sm'),
 
@@ -127,6 +162,10 @@ class OvertimeRecordsTable
                 SelectFilter::make('status')
                     ->label('Status')
                     ->options(OvertimeStatus::class),
+
+                SelectFilter::make('source')
+                    ->label('Sumber')
+                    ->options(Source::class),
 
                 SelectFilter::make('tier')
                     ->label('Tier')

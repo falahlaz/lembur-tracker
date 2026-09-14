@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Domain\Lembur\DurationCalculator;
 use App\Enums\OvertimeStatus;
+use App\Enums\Source;
 use App\Enums\Tier;
 use App\Observers\OvertimeRecordObserver;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
@@ -13,14 +15,19 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Spatie\Activitylog\Support\LogOptions;
 use Spatie\Activitylog\Models\Concerns\LogsActivity;
+use Spatie\Activitylog\Support\LogOptions;
 
 #[ObservedBy(OvertimeRecordObserver::class)]
 #[Fillable([
     'user_id', 'rule_version_id', 'payroll_period_id',
     'overtime_date', 'start_time', 'end_time',
     'work_description', 'evidence_url', 'status', 'notes', 'created_by_id',
+    // Sync Kimai: referensi asal-usul dan `break` yang ikut menentukan durasi.
+    // `kimai_duration_minutes`, `locally_modified`, dan `synced_at` sengaja TIDAK
+    // di sini — ketiganya hanya boleh ditulis oleh jalur sync.
+    'source', 'kimai_timesheet_id', 'kimai_project_id', 'kimai_activity_id',
+    'break_minutes', 'evidence_needs_review',
 ])]
 class OvertimeRecord extends Model
 {
@@ -42,6 +49,12 @@ class OvertimeRecord extends Model
             'leave_credit_minutes' => 'integer',
             'duration_raw_minutes' => 'integer',
             'duration_effective_minutes' => 'integer',
+            'source' => Source::class,
+            'break_minutes' => 'integer',
+            'kimai_duration_minutes' => 'integer',
+            'locally_modified' => 'boolean',
+            'evidence_needs_review' => 'boolean',
+            'synced_at' => 'datetime',
         ];
     }
 
@@ -53,6 +66,7 @@ class OvertimeRecord extends Model
                 'duration_raw_minutes', 'duration_effective_minutes',
                 'tier', 'meal_allowance_amount', 'leave_credit_minutes',
                 'work_description', 'evidence_url', 'notes',
+                'break_minutes', 'evidence_needs_review', 'locally_modified',
             ])
             ->logOnlyDirty()
             ->dontLogEmptyChanges();
@@ -82,6 +96,45 @@ class OvertimeRecord extends Model
     public function leaveBalance(): HasOne
     {
         return $this->hasOne(LeaveBalance::class);
+    }
+
+    /**
+     * SY-10 — SATU-SATUNYA sumber kebenaran durasi mentah, dipakai bersama oleh
+     * OvertimeRecordObserver dan OvertimeDayCalculator. Keduanya dulu memanggil
+     * DurationCalculator::rawMinutes() sendiri-sendiri; begitu durasi Kimai masuk,
+     * pemanggil kedua akan menimpa yang pertama tanpa suara.
+     *
+     * `duration` dari Kimai sudah bersih dari `break`, sehingga sengaja berbeda
+     * dari selisih jam: 19:00–23:00 dengan istirahat 30 menit menghasilkan 210
+     * menit, bukan 240. Itu bukan bug (SY-10).
+     */
+    public function rawMinutes(): int
+    {
+        if ($this->source === Source::Kimai
+            && ! $this->locally_modified
+            && $this->kimai_duration_minutes !== null) {
+            return $this->kimai_duration_minutes;
+        }
+
+        $clock = DurationCalculator::rawMinutes(
+            (string) $this->start_time,
+            (string) $this->end_time,
+        );
+
+        // Record Kimai yang sudah diedit user tetap memotong break, supaya durasinya
+        // tidak melompat naik 30 menit hanya karena user membetulkan deskripsi.
+        return max(0, $clock - (int) ($this->break_minutes ?? 0));
+    }
+
+    /** SY-12 — selama evidence masih placeholder, record tidak boleh diajukan. */
+    public function needsEvidenceReview(): bool
+    {
+        return (bool) $this->evidence_needs_review;
+    }
+
+    public function isFromKimai(): bool
+    {
+        return $this->source === Source::Kimai;
     }
 
     /** OQ-2 — dicatat admin atas nama user lain. */
