@@ -2,14 +2,12 @@
 
 namespace App\Domain\Lembur;
 
-use App\Enums\BalanceStatus;
 use App\Enums\Tier;
-use App\Models\LeaveBalance;
 use App\Models\OvertimeRecord;
 use App\Models\OvertimeRule;
 use App\Models\User;
-use Illuminate\Database\Eloquent\Collection;
 use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -70,10 +68,10 @@ class OvertimeDayCalculator
 
                 $dailyTotal = 0;
                 foreach ($records as $record) {
-                    $raw = DurationCalculator::rawMinutes(
-                        (string) $record->start_time,
-                        (string) $record->end_time,
-                    );
+                    // SY-10 — lewat model, bukan langsung ke DurationCalculator:
+                    // record bersumber Kimai memakai `duration` yang sudah bersih
+                    // dari `break`, dan nilainya tidak boleh tertimpa di sini.
+                    $raw = $record->rawMinutes();
                     $effective = DurationCalculator::effectiveMinutes($raw, $user->rounding_enabled);
 
                     $record->duration_raw_minutes = $raw;
@@ -124,10 +122,14 @@ class OvertimeDayCalculator
         string $startTime,
         string $endTime,
         ?int $excludeRecordId = null,
+        int $breakMinutes = 0,
     ): EntitlementPreview {
         $rule = $this->rules->forDate($date);
 
-        $raw = DurationCalculator::rawMinutes($startTime, $endTime);
+        // SY-10 — preview wajib memakai aritmetika yang sama dengan yang disimpan,
+        // termasuk potongan istirahat; kalau tidak, preview berbohong pada record
+        // hasil sync yang punya break.
+        $raw = max(0, DurationCalculator::rawMinutes($startTime, $endTime) - $breakMinutes);
         $effective = DurationCalculator::effectiveMinutes($raw, $user->rounding_enabled);
 
         // BR-02 — total harian menjumlahkan sesi lain di tanggal yang sama.

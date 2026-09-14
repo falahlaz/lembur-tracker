@@ -2,6 +2,7 @@
 
 namespace App\Observers;
 
+use App\Domain\Kimai\KimaiSynchronizer;
 use App\Domain\Lembur\DurationCalculator;
 use App\Domain\Lembur\OvertimeDayCalculator;
 use App\Domain\Lembur\PayrollPeriodResolver;
@@ -37,10 +38,12 @@ class OvertimeRecordObserver
             return;
         }
 
-        $raw = DurationCalculator::rawMinutes(
-            (string) $record->start_time,
-            (string) $record->end_time,
-        );
+        // SY-14 — begitu user menyimpan perubahan apa pun pada record bersumber
+        // Kimai, record itu dikunci dari sync selamanya. Ditentukan SEBELUM durasi
+        // dihitung, karena rawMinutes() membaca flag ini.
+        $this->markLocallyModified($record);
+
+        $raw = $record->rawMinutes();
         $rounding = (bool) ($record->user?->rounding_enabled ?? false);
 
         $record->duration_raw_minutes = $raw;
@@ -55,6 +58,33 @@ class OvertimeRecordObserver
         $record->rule_version_id = $rule->id;
         $record->payroll_period_id = $this->periods->resolve($date, $rule)->id;
     }
+
+    /**
+     * SY-14 — hanya menyala untuk perubahan yang datang dari manusia. Sync sendiri
+     * menulis lewat guard KimaiSynchronizer::isSyncing(), jadi pembaruan rutin
+     * dari Kimai tidak mengunci recordnya sendiri.
+     *
+     * Sekali menyala tidak pernah padam: tidak ada cabang yang mengembalikannya
+     * ke false.
+     */
+    private function markLocallyModified(OvertimeRecord $record): void
+    {
+        if (! $record->exists || ! $record->isFromKimai() || $record->locally_modified) {
+            return;
+        }
+
+        if (KimaiSynchronizer::isSyncing()) {
+            return;
+        }
+
+        $touched = array_keys($record->getDirty());
+        $human = array_diff($touched, ['updated_at', 'synced_at', 'locally_modified']);
+
+        if ($human !== []) {
+            $record->locally_modified = true;
+        }
+    }
+
     public function saved(OvertimeRecord $record): void
     {
         // `saved` menyala sebelum syncOriginal(), jadi nilai lama masih terbaca.
