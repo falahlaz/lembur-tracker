@@ -2,6 +2,7 @@
 
 namespace App\Filament\Concerns;
 
+use App\Domain\Kimai\KimaiSynchronizer;
 use App\Enums\SyncStatus;
 use App\Filament\Pages\Preferensi;
 use App\Jobs\SyncKimaiTimesheets;
@@ -118,6 +119,10 @@ trait SyncsWithKimai
 
     protected function kimaiSyncIsRunning(User $user): bool
     {
+        // §10 — sebelum menilai, bersihkan run yang sudah kedaluwarsa. Tanpa ini,
+        // satu job yang mati diam-diam mengunci tombol sync selamanya.
+        KimaiSynchronizer::failStaleRuns($user);
+
         // Tiga penanda berbeda karena job punya tiga fase: sudah di-dispatch tapi
         // belum diambil worker, sedang memegang kunci, dan sudah menulis sync_run.
         return SyncKimaiTimesheets::isPendingFor($user)

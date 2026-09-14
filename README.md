@@ -152,6 +152,16 @@ tanpa merender satu pun halaman.
 | `ReminderDispatcher` | F-07 — reminder, anti-kirim-ganda |
 | `HistoricalImporter` | OQ-4 — impor lembur historis |
 
+Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
+
+| Berkas | Aturan |
+|---|---|
+| `KimaiClient` | §4 — satu-satunya tempat token menyentuh jaringan |
+| `KimaiTimesheet` | SY-16 — parse offset lalu konversi ke WIB |
+| `SyncRangeResolver` | SY-02–SY-04 — rentang yang ditarik, berbasis watermark |
+| `KimaiSynchronizer` | SY-05–SY-15 — filter, dedup, konflik, laporan |
+| `KimaiConnection` | F-11 — simpan/tes/hapus API key |
+
 ### Empat hal yang paling mudah salah
 
 1. **Hak melekat pada TANGGAL, bukan record** (BR-02 + BR-07). Menyimpan, mengubah,
@@ -164,6 +174,11 @@ tanpa merender satu pun halaman.
    dan `earned_date` bertipe `date` dan tidak pernah dikonversi timezone. Mencampurnya
    dengan konversi UTC↔WIB membuat saldo hangus sehari lebih cepat.
 4. **Rupiah selalu integer.** Tidak ada float di mana pun.
+5. **Durasi record punya satu pintu baca: `OvertimeRecord::rawMinutes()`** (SY-10).
+   Kimai mengirim `duration` yang sudah bersih dari `break`, sehingga sengaja
+   berbeda dari selisih jam. Observer DAN `OvertimeDayCalculator` sama-sama
+   memanggil method itu; menghitung sendiri dari `start_time`/`end_time` di salah
+   satunya akan menimpa angka dari Kimai tanpa satu pun pesan error.
 
 ---
 
@@ -173,11 +188,13 @@ tanpa merender satu pun halaman.
 php artisan test
 ```
 
-127 test, 520 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
+163 test, 639 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
 
 ```bash
 php artisan test --filter=br_13     # clamping akhir bulan
 php artisan test --filter=br_22     # urutan validasi klaim
+php artisan test --filter=sy_        # aturan sinkronisasi Kimai
+php artisan test --filter=t_2        # skenario uji wajib PRD Sync Kimai §11
 ```
 
 Test yang menyentuh saldo **wajib** memanggil `freezeDate()` lebih dulu. Seluruh
@@ -186,10 +203,45 @@ merah bulan depan hanya karena jam dinding bergerak.
 
 ---
 
+## Sinkronisasi Kimai
+
+Jam lembur sudah wajib diisi di KIMAI, jadi tidak ada alasan menyuruh orang
+mengetiknya ulang di sini. **Pengaturan → Preferensi → Integrasi Kimai** untuk
+memasang API key (buat di Kimai lewat Profil → API Access), lalu tombol **Sync
+Kimai** di Dashboard atau Daftar Lembur menariknya di latar belakang.
+
+Yang datang sendiri: tanggal, jam, durasi, deskripsi. Yang tetap manual: URL
+evidence dan status approval. Record hasil sync diberi badge **"Lengkapi
+evidence"** dan tidak bisa diajukan sebelum deep link Kimai diganti link SPL
+atau timesheet di OneDrive — SOP §6 tetap mewajibkan keduanya.
+
+Sebelum dipakai di instance baru, verifikasi kontrak API-nya dulu:
+
+```bash
+php artisan lemburku:kimai:probe
+```
+
+Command itu read-only dan tidak menyimpan token; ia meminta token lewat prompt
+tersembunyi, lalu melaporkan versi Kimai, nama parameter urutan yang diterima
+(`order_by` vs `orderBy`), dan apakah `tags[]` benar-benar menyaring. Hasilnya
+dituangkan ke `KIMAI_ORDER_PARAM` dan `KIMAI_TAGS` di `.env` — tidak ada kode
+yang perlu diubah.
+
+Dua hal yang mudah mengagetkan:
+
+- **Durasi bisa lebih pendek dari selisih jam.** 19:00–23:00 dengan istirahat 30
+  menit tercatat 3 jam 30 menit, karena `duration` dari Kimai sudah bersih dari
+  `break` (SY-10). Istirahatnya ditampilkan supaya selisihnya bisa dijelaskan.
+- **Record yang kamu edit tidak pernah ditimpa lagi.** Sekali disentuh manusia,
+  record itu keluar dari jangkauan sync selamanya (SY-14).
+
+---
+
 ## Yang belum dikerjakan
 
 - **Fase 2** — peran Atasan/PM (kolom `manager_id` dan sistem role sudah disiapkan,
   jadi tidak perlu migrasi struktural), approval di dalam sistem, dashboard tim.
-- **Fase 3** — import CSV KIMAI, integrasi API KIMAI, sinkronisasi status ESS.
+- **Fase 3** — import CSV KIMAI dan sinkronisasi status ESS. Integrasi API KIMAI
+  sudah jalan untuk sync manual; sync otomatis harian (F-14/SY-21) belum.
 - **OQ-1** — tabel hari libur nasional. Sengaja dilewati: BR-08 membuat hari libur
   dan hari kerja diperlakukan sama, jadi dampaknya kosmetik saja.

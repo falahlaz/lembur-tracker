@@ -64,17 +64,25 @@ class KimaiSynchronizer
 
         try {
             $entries = $this->client->timesheets((string) $user->kimai_api_token, $range->begin, $range->end);
+
+            $eligible = $this->filter($entries, $run);
+            $run->count_fetched = count($entries);
+
+            foreach ($eligible as $entry) {
+                $this->processOne($user, $run, $entry);
+            }
         } catch (KimaiException $e) {
             $this->fail($run, $e->userMessage());
 
             throw $e;
-        }
+        } catch (Throwable $e) {
+            // Apa pun yang tidak terduga tetap harus menutup run-nya. Kalau tidak,
+            // baris ini tertinggal berstatus `running` selamanya dan tombol sync
+            // terkunci permanen — kegagalan yang jauh lebih menyebalkan daripada
+            // kegagalan sync itu sendiri.
+            $this->fail($run, 'Sync berhenti karena kesalahan tak terduga. Coba lagi, atau hubungi admin.');
 
-        $eligible = $this->filter($entries, $run);
-        $run->count_fetched = count($entries);
-
-        foreach ($eligible as $entry) {
-            $this->processOne($user, $run, $entry);
+            throw $e;
         }
 
         // Batch yang masa berlakunya sudah lewat ditandai hangus sekarang juga,
@@ -289,6 +297,24 @@ class KimaiSynchronizer
         $run->status = $run->count_failed > 0 ? SyncStatus::Partial : SyncStatus::Success;
         $run->finished_at = now();
         $run->save();
+    }
+
+    /**
+     * §10 — run yang macet melewati TTL kunci ditandai gagal, sehingga tombol
+     * sync hidup kembali. Dipanggil saat UI memeriksa status, bukan lewat job
+     * terjadwal: yang butuh jawabannya hanya layar yang sedang dibuka.
+     */
+    public static function failStaleRuns(User $user): void
+    {
+        SyncRun::query()
+            ->where('user_id', $user->id)
+            ->active()
+            ->where('created_at', '<', now()->subSeconds((int) config('kimai.lock_ttl')))
+            ->update([
+                'status' => SyncStatus::Failed->value,
+                'error_message' => 'Sync berhenti di tengah jalan dan tidak selesai. Coba jalankan lagi.',
+                'finished_at' => now(),
+            ]);
     }
 
     private function fail(SyncRun $run, string $message): void

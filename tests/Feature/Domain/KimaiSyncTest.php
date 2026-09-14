@@ -3,6 +3,7 @@
 namespace Tests\Feature\Domain;
 
 use App\Domain\Kimai\Exceptions\KimaiTokenInvalid;
+use App\Domain\Kimai\KimaiClient;
 use App\Domain\Kimai\KimaiConnection;
 use App\Domain\Kimai\KimaiSynchronizer;
 use App\Enums\OvertimeStatus;
@@ -447,6 +448,58 @@ class KimaiSyncTest extends TestCase
         $this->assertSame(2, $run->count_created);
         $this->assertSame(SyncStatus::Success, $run->status);
         $this->assertSame(2, SyncRunItem::count());
+    }
+
+    #[Test]
+    public function bagian_10_run_yang_macet_ditandai_gagal_agar_tombol_hidup_lagi(): void
+    {
+        $user = $this->kimaiUser();
+
+        // Run yang tertinggal berstatus `running` karena job mati diam-diam.
+        $stale = SyncRun::query()->create([
+            'user_id' => $user->id,
+            'status' => SyncStatus::Running,
+            'range_start' => now()->subDay(),
+            'range_end' => now(),
+        ]);
+        $stale->created_at = now()->subMinutes(30);
+        $stale->save();
+
+        KimaiSynchronizer::failStaleRuns($user);
+
+        $this->assertSame(SyncStatus::Failed, $stale->refresh()->status);
+        $this->assertNotNull($stale->finished_at);
+    }
+
+    #[Test]
+    public function bagian_10_kesalahan_tak_terduga_tetap_menutup_run(): void
+    {
+        $user = $this->kimaiUser();
+
+        // Kegagalan di luar jalur KimaiException — bug, bukan masalah jaringan.
+        $this->app->bind(KimaiClient::class, fn () => new class extends KimaiClient
+        {
+            public function timesheets(string $token, $begin, $end): array
+            {
+                throw new \RuntimeException('boom');
+            }
+        });
+
+        $thrown = null;
+        try {
+            $this->sync($user);
+        } catch (\Throwable $e) {
+            // Dibiarkan naik supaya queue menandai job gagal.
+            $thrown = $e;
+        }
+
+        $this->assertInstanceOf(\RuntimeException::class, $thrown);
+
+        $run = SyncRun::latest('id')->first();
+        $this->assertNotNull($run);
+        // Kalau run tertinggal `running`, tombol sync terkunci permanen.
+        $this->assertSame(SyncStatus::Failed, $run->status);
+        $this->assertNotNull($run->finished_at);
     }
 
     #[Test]
