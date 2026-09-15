@@ -195,6 +195,32 @@ class KimaiIntegrationTest extends TestCase
     }
 
     #[Test]
+    public function sy_23_riwayat_menjelaskan_timesheet_yang_digabung(): void
+    {
+        $user = $this->kimaiUser();
+
+        // 2026-09-09 hari Rabu; empat entri ini satu jendela lembur (18:00 → 02:00).
+        $this->fakeKimai([
+            $this->kimaiSlot(1, '2026-09-09', '18:00', '20:00'),
+            $this->kimaiSlot(2, '2026-09-09', '20:00', '22:00'),
+            $this->kimaiSlot(3, '2026-09-09', '22:00', '00:00'),
+            $this->kimaiSlot(4, '2026-09-10', '00:00', '02:00'),
+        ]);
+        app(KimaiSynchronizer::class)->run($user);
+        $this->actingAs($user);
+
+        // "4 timesheet, 1 lembur" harus terbaca sebagai peleburan, bukan data hilang.
+        $this->get(RiwayatSync::getUrl())
+            ->assertOk()
+            ->assertSee('Sync selesai · 1 lembur baru')
+            ->assertSee('digabung dari 4 timesheet');
+
+        $this->get(OvertimeRecordResource::getUrl('index'))
+            ->assertOk()
+            ->assertSee('4 timesheet digabung');
+    }
+
+    #[Test]
     public function sy_12_status_tidak_bisa_diajukan_selama_evidence_belum_diganti(): void
     {
         $user = $this->kimaiUser();
