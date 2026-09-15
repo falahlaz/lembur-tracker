@@ -3,12 +3,12 @@
 namespace App\Filament\Resources\OvertimeRecords\Schemas;
 
 use App\Models\OvertimeRecord;
+use App\Support\AuditTrail;
 use App\Support\Format;
-use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Infolists\Components\ViewEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
-use Spatie\Activitylog\Models\Activity;
 
 /** F-10 — detail record beserta audit trail sebagai timeline. */
 class OvertimeRecordInfolist
@@ -69,68 +69,22 @@ class OvertimeRecordInfolist
             Section::make('Riwayat perubahan')
                 ->description('Disimpan minimal 1 tahun sesuai SOP §10.')
                 ->schema([
-                    RepeatableEntry::make('activities')
+                    ViewEntry::make('activities')
                         ->label('')
-                        ->state(fn (OvertimeRecord $record) => static::auditTrail($record))
-                        ->schema([
-                            TextEntry::make('when')->label('Waktu'),
-                            TextEntry::make('who')->label('Oleh'),
-                            TextEntry::make('what')->label('Perubahan')->columnSpanFull(),
-                        ])
-                        ->columns(2)
-                        ->placeholder('Belum ada perubahan tercatat.'),
+                        ->view('filament.infolists.audit-trail')
+                        ->state(fn (OvertimeRecord $record) => AuditTrail::for($record)),
                 ]),
         ]);
     }
 
-    /** @return array<int, array{when: string, who: string, what: string}> */
+    /**
+     * Dipertahankan sebagai satu-satunya pintu masuk audit trail record ini;
+     * isinya ada di App\Support\AuditTrail.
+     *
+     * @return array<int, array<string, mixed>>
+     */
     public static function auditTrail(OvertimeRecord $record): array
     {
-        return Activity::query()
-            ->where('subject_type', $record->getMorphClass())
-            ->where('subject_id', $record->getKey())
-            // Dua perubahan dalam detik yang sama akan berurutan sembarang bila
-            // hanya diurut waktu; id memberi urutan yang pasti.
-            ->latest()
-            ->orderByDesc('id')
-            ->get()
-            ->map(function (Activity $activity) {
-                // activitylog v5 memindahkan nilai lama/baru ke kolom khusus
-                // `attribute_changes`; `properties` disisakan untuk data custom.
-                $changesBag = $activity->attribute_changes ?? $activity->properties ?? [];
-                $old = $changesBag['old'] ?? [];
-                $new = $changesBag['attributes'] ?? [];
-
-                $changes = collect($new)
-                    ->map(fn ($value, $field) => sprintf(
-                        '%s: %s → %s',
-                        $field,
-                        static::stringify($old[$field] ?? null),
-                        static::stringify($value),
-                    ))
-                    ->values()
-                    ->all();
-
-                return [
-                    'when' => $activity->created_at
-                        ->timezone(config('app.display_timezone'))
-                        ->translatedFormat('j M Y, H:i'),
-                    'who' => $activity->causer?->name ?? 'Sistem',
-                    'what' => $changes === []
-                        ? ucfirst((string) $activity->event)
-                        : implode(' · ', $changes),
-                ];
-            })
-            ->all();
-    }
-
-    private static function stringify(mixed $value): string
-    {
-        return match (true) {
-            $value === null => '—',
-            is_bool($value) => $value ? 'ya' : 'tidak',
-            is_array($value) => json_encode($value),
-            default => (string) $value,
-        };
+        return AuditTrail::for($record);
     }
 }

@@ -230,8 +230,9 @@ class OvertimeRecordResourceTest extends TestCase
 
         $this->assertNotEmpty($trail);
         $this->assertSame($user->name, $trail[0]['who']);
-        $this->assertStringContainsString('status', $trail[0]['what']);
-        $this->assertStringContainsString('approved', $trail[0]['what']);
+        // Nama kolom dan nilai enum tampil dalam bahasa UI, bukan bahasa database.
+        $this->assertStringContainsString('Status', $trail[0]['what']);
+        $this->assertStringContainsString('Disetujui', $trail[0]['what']);
     }
 
     #[Test]
@@ -246,6 +247,9 @@ class OvertimeRecordResourceTest extends TestCase
             ->assertSee('4 jam 30 menit')
             ->assertSee('Rp50.000')
             ->assertSee('Riwayat perubahan')
+            // Timeline benar-benar terender, bukan sekadar judul section-nya.
+            ->assertSee('Dicatat oleh')
+            ->assertSee('Lihat detail')
             ->assertSee('bukan perhitungan payroll resmi');
     }
 }
