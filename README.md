@@ -112,7 +112,10 @@ Aplikasi ada di `http://localhost:8080/app` (ubah lewat `APP_PORT`).
 Sekali cek setelah `up`, karena kegagalannya tidak kelihatan dari tampilan:
 
 ```bash
-curl -I http://localhost:8080/livewire/livewire.js   # harus 200
+curl -I http://localhost:8080/livewire/livewire.js                          # harus 200
+curl -I http://localhost:8080/js/filament/support/support.js                # harus 200
+curl -I http://localhost:8080/js/filament/forms/components/select.js        # harus 200
+curl -I http://localhost:8080/js/filament/forms/components/date-time-picker.js  # harus 200
 ```
 
 Livewire menyajikan JS-nya lewat route, bukan berkas di `public/`. Kalau
@@ -121,6 +124,14 @@ normal, tetapi Livewire dan Alpine tidak pernah jalan: tombol tidak bereaksi,
 form login hanya me-reload halaman, dan input password tampil sebagai teks
 terang. Jangan menambahkan blok `location` regex `\.(css|js)$` tanpa
 `try_files` — itu persis yang menjegal route ini.
+
+Tiga URL berikutnya adalah berkas sungguhan, diterbitkan
+`php artisan filament:upgrade` saat image dibangun. Komponen `native(false)`
+mengambilnya belakangan lewat `x-load`, jadi kalau salah satunya 404 halaman
+tetap ter-style dan tetap render, tetapi setiap **date picker berubah jadi
+input readonly yang kalendernya tak pernah terbuka** dan setiap **select jadi
+kotak kosong** — tanpa error di console. Build image akan gagal kalau ketiganya
+tidak terbit (lihat `Dockerfile`), dan `AssetsPublishedTest` menjaganya di CI.
 
 `DB_USERNAME`, `DB_PASSWORD`, dan `DB_DATABASE` hanya dipakai MySQL saat volume
 dibuat pertama kali. Mengubahnya setelah itu tidak berpengaruh sampai
@@ -188,7 +199,7 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 php artisan test
 ```
 
-163 test, 639 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
+165 test, 646 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
 
 ```bash
 php artisan test --filter=br_13     # clamping akhir bulan
