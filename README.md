@@ -199,7 +199,7 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 php artisan test
 ```
 
-163 test, 639 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
+165 test, 646 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
 
 ```bash
 php artisan test --filter=br_13     # clamping akhir bulan
