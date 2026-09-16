@@ -358,4 +358,25 @@ class KimaiIntegrationTest extends TestCase
         $riwayat->call('refreshKimaiSync')
             ->assertCanSeeTableRecords($user->syncRuns()->get());
     }
+
+    /**
+     * Regresi bug yang hanya kelihatan di browser: Filament menyusun header
+     * action SEKALI per request lewat hook cache-nya saat boot, jadi jauh
+     * sebelum handler tombolnya jalan. Tanpa menyusun ulang, render setelah klik
+     * memakai objek Action lama ($running masih false) sehingga tombolnya tidak
+     * pernah membawa wire:poll — dan refreshKimaiSync() tidak pernah terpanggil
+     * sama sekali. Seluruh rantai sesudahnya (notifikasi F-13 dan sinyal ke
+     * widget) ikut mati diam-diam.
+     */
+    #[Test]
+    public function f_12_tombol_langsung_membawa_wire_poll_setelah_diklik(): void
+    {
+        Queue::fake();
+        $this->actingAs($this->kimaiUser());
+
+        Livewire::test(Dashboard::class)
+            ->callAction('syncKimai')
+            ->assertSee('Menyinkronkan…')
+            ->assertSee('wire:poll.3s', escape: false);
+    }
 }

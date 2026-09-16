@@ -93,6 +93,8 @@ trait SyncsWithKimai
         // benar-benar milik run yang baru ini.
         $this->rememberLastSeenRun($user);
 
+        $this->rebuildKimaiSyncAction();
+
         Notification::make()
             ->success()
             ->title('Sync berjalan di latar belakang')
@@ -146,6 +148,29 @@ trait SyncsWithKimai
             ->title($latest->summary())
             ->body('Detail lengkapnya ada di Riwayat Sync.')
             ->send();
+    }
+
+    /**
+     * Filament menyusun header action SEKALI per request, lewat hook
+     * cacheInteractsWithHeaderActions() yang jalan saat boot — jadi jauh sebelum
+     * handler tombolnya dipanggil. Tanpa menyusun ulang di sini, render setelah
+     * klik memakai objek Action lama yang masih dibangun dengan $running = false:
+     * tombolnya tetap tertulis "Sync Kimai", tetap aktif, dan yang terpenting
+     * TIDAK membawa wire:poll. Akibatnya refreshKimaiSync() tidak pernah
+     * terpanggil sama sekali — tidak ada polling, tidak ada notifikasi selesai,
+     * dan tidak ada sinyal ke widget.
+     *
+     * cacheAction() menyimpan berdasarkan nama, jadi menyusun ulang menimpa
+     * entri lama alih-alih menggandakannya.
+     */
+    protected function rebuildKimaiSyncAction(): void
+    {
+        if (! method_exists($this, 'cacheInteractsWithHeaderActions')) {
+            return;
+        }
+
+        $this->cachedHeaderActions = [];
+        $this->cacheInteractsWithHeaderActions();
     }
 
     protected function kimaiSyncIsRunning(User $user): bool
