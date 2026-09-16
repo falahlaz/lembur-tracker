@@ -4,9 +4,12 @@ namespace Tests\Feature\Filament;
 
 use App\Enums\ClaimType;
 use App\Enums\OvertimeStatus;
+use App\Filament\Concerns\RefreshesAfterKimaiSync;
 use App\Filament\Pages\Dashboard;
+use App\Filament\Widgets\AktivitasTerakhir;
 use App\Filament\Widgets\BannerSaldoHangus;
 use App\Filament\Widgets\RingkasanStats;
+use App\Filament\Widgets\SaldoAktifTable;
 use App\Filament\Widgets\TimelinePayroll;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -109,7 +112,7 @@ class DashboardTest extends TestCase
         $this->logOvertime($user, '2026-03-12', '09:00', '19:00');
         $this->submitClaim($user, '2026-04-01', ClaimType::FullDay);
 
-        Livewire::test(\App\Filament\Widgets\AktivitasTerakhir::class)
+        Livewire::test(AktivitasTerakhir::class)
             ->assertSee('Lembur 12 Maret 2026')
             ->assertSee('Klaim 1 April 2026')
             ->assertSee('libur 1 hari penuh');
@@ -133,6 +136,39 @@ class DashboardTest extends TestCase
                 $widget,
                 $registry->getClass($registry->getName($widget)),
                 "Widget {$widget} belum terdaftar di Livewire; permintaan lazy-load-nya akan 419.",
+            );
+        }
+    }
+
+    /**
+     * Inti F-12: widget adalah komponen Livewire terpisah, jadi selesainya sync
+     * harus sampai ke sana lewat event. Tes ini sekaligus membuktikan cache
+     * tabel Filament benar-benar lepas tiap request — tanpa itu, angka lama
+     * akan bertahan meski listener-nya jalan.
+     */
+    #[Test]
+    public function widget_menyegarkan_datanya_saat_sync_selesai(): void
+    {
+        $user = $this->employee();
+        $this->actingAs($user);
+
+        $stats = Livewire::test(RingkasanStats::class)->assertDontSee('8 jam');
+        $saldo = Livewire::test(SaldoAktifTable::class)->assertSee('Belum ada saldo aktif');
+
+        $this->logOvertime($user, '2026-03-19', '09:00', '19:00', OvertimeStatus::Approved);
+
+        $stats->dispatch('kimai-sync-selesai')->assertSee('8 jam');
+        $saldo->dispatch('kimai-sync-selesai')->assertDontSee('Belum ada saldo aktif');
+    }
+
+    #[Test]
+    public function setiap_widget_dashboard_mendengarkan_sinyal_sync(): void
+    {
+        foreach ((new Dashboard)->getWidgets() as $widget) {
+            $this->assertContains(
+                RefreshesAfterKimaiSync::class,
+                class_uses_recursive($widget),
+                "Widget {$widget} tidak akan tersegarkan setelah sync Kimai selesai.",
             );
         }
     }

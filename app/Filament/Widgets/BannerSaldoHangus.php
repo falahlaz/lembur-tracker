@@ -3,6 +3,7 @@
 namespace App\Filament\Widgets;
 
 use App\Domain\Lembur\DashboardSummary;
+use App\Filament\Concerns\RefreshesAfterKimaiSync;
 use App\Models\LeaveBalance;
 use Filament\Widgets\Widget;
 use Illuminate\Support\Collection;
@@ -17,6 +18,8 @@ use Illuminate\Support\Facades\Auth;
  */
 class BannerSaldoHangus extends Widget
 {
+    use RefreshesAfterKimaiSync;
+
     protected static ?int $sort = 1;
 
     protected int|string|array $columnSpan = 'full';
