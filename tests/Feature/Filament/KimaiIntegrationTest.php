@@ -264,4 +264,98 @@ class KimaiIntegrationTest extends TestCase
         // SY-14 — sentuhan manusia mengunci record ini dari sync selamanya.
         $this->assertTrue($record->locally_modified);
     }
+
+    #[Test]
+    public function f_13_poll_selama_run_masih_hidup_tidak_mengumumkan_apa_pun(): void
+    {
+        Queue::fake();
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        SyncKimaiTimesheets::markPending($user);
+
+        Livewire::test(Dashboard::class)
+            ->call('refreshKimaiSync')
+            ->assertNotDispatched('kimai-sync-selesai')
+            ->assertNotNotified();
+    }
+
+    #[Test]
+    public function f_13_run_yang_baru_selesai_menyegarkan_widget_dan_memberi_ringkasan(): void
+    {
+        $user = $this->kimaiUser();
+        $this->fakeKimai([$this->kimaiEntry()]);
+        app(KimaiSynchronizer::class)->run($user);
+        $this->actingAs($user);
+
+        Livewire::test(Dashboard::class)
+            ->call('refreshKimaiSync')
+            ->assertDispatched('kimai-sync-selesai')
+            ->assertNotified('Sync selesai · 1 lembur baru');
+    }
+
+    /**
+     * Pengaman kalau wire:poll gagal dicabut saat tombolnya berubah: satu poll
+     * yatim tidak boleh menyegarkan widget setiap tiga detik selamanya.
+     */
+    #[Test]
+    public function f_13_run_yang_sama_tidak_menyegarkan_widget_dua_kali(): void
+    {
+        $user = $this->kimaiUser();
+        $this->fakeKimai([$this->kimaiEntry()]);
+        app(KimaiSynchronizer::class)->run($user);
+        $this->actingAs($user);
+
+        Livewire::test(Dashboard::class)
+            ->call('refreshKimaiSync')
+            ->assertDispatched('kimai-sync-selesai')
+            ->call('refreshKimaiSync')
+            ->assertNotDispatched('kimai-sync-selesai');
+    }
+
+    /** Tab kedua tetap menyegarkan widget-nya, meski toast-nya sudah dipakai tab pertama. */
+    #[Test]
+    public function f_13_tab_kedua_tetap_menyegarkan_widget(): void
+    {
+        $user = $this->kimaiUser();
+        $this->fakeKimai([$this->kimaiEntry()]);
+        app(KimaiSynchronizer::class)->run($user);
+        $this->actingAs($user);
+
+        Livewire::test(Dashboard::class)
+            ->call('refreshKimaiSync')
+            ->assertNotified();
+
+        // Komponen baru = tab baru: penanda dispatch-nya ikut baru, tetapi
+        // penanda notifikasi hidup di session yang dibagi bersama.
+        Livewire::test(Dashboard::class)
+            ->call('refreshKimaiSync')
+            ->assertDispatched('kimai-sync-selesai')
+            ->assertNotNotified();
+    }
+
+    /**
+     * Tabel yang hidup di komponen HALAMAN tidak butuh listener: satu putaran
+     * wire:poll sudah menghidrasi ulang komponennya dari nol, dan cache record
+     * Filament ikut lepas karena disimpan di properti protected. Tes ini
+     * menjaga agar asumsi itu tidak diam-diam berubah.
+     */
+    #[Test]
+    public function f_12_tabel_di_halaman_ikut_segar_lewat_satu_putaran_poll(): void
+    {
+        $user = $this->kimaiUser();
+        $this->fakeKimai([$this->kimaiEntry()]);
+        $this->actingAs($user);
+
+        $lembur = Livewire::test(ListOvertimeRecords::class);
+        $riwayat = Livewire::test(RiwayatSync::class)->assertSee('Belum ada sync');
+
+        app(KimaiSynchronizer::class)->run($user);
+
+        $lembur->call('refreshKimaiSync')
+            ->assertCanSeeTableRecords(OvertimeRecord::all());
+
+        $riwayat->call('refreshKimaiSync')
+            ->assertCanSeeTableRecords($user->syncRuns()->get());
+    }
 }

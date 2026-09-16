@@ -21,9 +21,25 @@ use Illuminate\Support\Facades\Auth;
  * ada yang perlu mematikannya. Filament Page tidak punya interval polling bawaan
  * (hanya Widget yang punya), dan ini menghindari render hook global yang akan
  * ikut jalan di setiap halaman panel.
+ *
+ * Polling itu hanya me-render ulang komponen HALAMAN. Tabel yang hidup di
+ * komponen halaman (Daftar Lembur, Riwayat Sync) ikut segar dengan sendirinya,
+ * tetapi widget dashboard adalah komponen Livewire terpisah dan Livewire 3 tidak
+ * me-render anak saat induknya berubah. Karena itu selesainya run juga disiarkan
+ * sebagai event `kimai-sync-selesai`; yang mendengarkannya ada di
+ * RefreshesAfterKimaiSync.
  */
 trait SyncsWithKimai
 {
+    /**
+     * Run yang widget-nya sudah disegarkan di TAB INI. Sengaja properti komponen,
+     * bukan session: session dibagi antar tab, dan kalau penanda dispatch ikut
+     * dibagi, tab kedua akan menampilkan data basi selamanya. Sekaligus pengaman
+     * kalau wire:poll gagal dicabut saat tombolnya berubah — tanpa ini satu poll
+     * yatim akan menyegarkan lima widget setiap tiga detik, selamanya.
+     */
+    public ?int $kimaiRefreshedRun = null;
+
     public function kimaiSyncAction(): Action
     {
         $user = Auth::user();
@@ -85,9 +101,9 @@ trait SyncsWithKimai
     }
 
     /**
-     * Dipanggil wire:poll setiap 3 detik selama run hidup. Efeknya dua: halaman
-     * ter-render ulang (tabel dan stat tile ikut segar), dan begitu run selesai,
-     * ringkasannya muncul sebagai notifikasi.
+     * Dipanggil wire:poll setiap 3 detik selama run hidup. Efeknya tiga: halaman
+     * ter-render ulang, widget dashboard disuruh menyegarkan dirinya sendiri, dan
+     * begitu run selesai ringkasannya muncul sebagai notifikasi.
      */
     public function refreshKimaiSync(): void
     {
@@ -97,10 +113,25 @@ trait SyncsWithKimai
             return;
         }
 
+        // Lebih luas daripada memeriksa status run: jendela "sudah di-dispatch,
+        // worker belum mengambil" belum punya baris sync_runs sama sekali, dan di
+        // jendela itu latestKimaiRun() masih menunjuk run LAMA yang sudah selesai.
+        if ($this->kimaiSyncIsRunning($user)) {
+            return;
+        }
+
         $latest = $this->latestKimaiRun($user);
 
-        if ($latest === null || $latest->status->isActive()) {
+        if ($latest === null) {
             return;
+        }
+
+        // Menyegarkan widget didahulukan dan penandanya per komponen: notifikasi
+        // cukup sekali untuk semua tab, tetapi setiap tab tetap wajib menyegarkan
+        // widget-nya sendiri.
+        if ($this->kimaiRefreshedRun !== $latest->id) {
+            $this->kimaiRefreshedRun = $latest->id;
+            $this->dispatch('kimai-sync-selesai');
         }
 
         if (session('kimai.last_seen_run') === $latest->id) {
@@ -135,8 +166,15 @@ trait SyncsWithKimai
         return SyncRun::query()->where('user_id', $user->id)->latest('id')->first();
     }
 
+    /**
+     * Run terakhir ditandai sudah dilihat DAN sudah disegarkan, supaya run lama
+     * tidak diumumkan ulang oleh poll pertama dari run yang baru saja dimulai.
+     */
     protected function rememberLastSeenRun(User $user): void
     {
-        session(['kimai.last_seen_run' => $this->latestKimaiRun($user)?->id]);
+        $id = $this->latestKimaiRun($user)?->id;
+
+        session(['kimai.last_seen_run' => $id]);
+        $this->kimaiRefreshedRun = $id;
     }
 }

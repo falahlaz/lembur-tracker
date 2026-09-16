@@ -4,6 +4,7 @@ namespace App\Filament\Widgets;
 
 use App\Domain\Lembur\DashboardSummary;
 use App\Domain\Lembur\PayrollPeriodResolver;
+use App\Filament\Concerns\RefreshesAfterKimaiSync;
 use Filament\Widgets\Widget;
 use Illuminate\Support\Facades\Auth;
 
@@ -15,6 +16,8 @@ use Illuminate\Support\Facades\Auth;
  */
 class TimelinePayroll extends Widget
 {
+    use RefreshesAfterKimaiSync;
+
     protected static ?int $sort = 3;
 
     protected int|string|array $columnSpan = 'full';

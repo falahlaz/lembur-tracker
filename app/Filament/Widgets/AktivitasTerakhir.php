@@ -3,6 +3,7 @@
 namespace App\Filament\Widgets;
 
 use App\Domain\Lembur\DashboardSummary;
+use App\Filament\Concerns\RefreshesAfterKimaiSync;
 use Filament\Widgets\Widget;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -10,6 +11,8 @@ use Illuminate\Support\Facades\Auth;
 /** F-03 — lima entri terbaru dari lembur dan klaim, digabung menjadi satu aliran. */
 class AktivitasTerakhir extends Widget
 {
+    use RefreshesAfterKimaiSync;
+
     protected static ?int $sort = 5;
 
     protected int|string|array $columnSpan = 'full';

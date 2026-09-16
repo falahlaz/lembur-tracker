@@ -3,6 +3,7 @@
 namespace App\Filament\Widgets;
 
 use App\Domain\Lembur\DashboardSummary;
+use App\Filament\Concerns\RefreshesAfterKimaiSync;
 use App\Support\Format;
 use Filament\Widgets\StatsOverviewWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
@@ -15,6 +16,8 @@ use Illuminate\Support\Facades\Auth;
  */
 class RingkasanStats extends StatsOverviewWidget
 {
+    use RefreshesAfterKimaiSync;
+
     protected static ?int $sort = 2;
 
     protected int|string|array $columnSpan = 'full';

@@ -2,6 +2,8 @@
 
 namespace App\Filament\Widgets;
 
+use App\Filament\Concerns\RefreshesAfterKimaiSync;
+use App\Filament\Resources\LeaveClaims\LeaveClaimResource;
 use App\Models\LeaveBalance;
 use App\Support\Format;
 use Filament\Actions\Action;
@@ -9,12 +11,14 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 /** F-03 — tabel batch saldo aktif: tanggal lembur, sisa, hangus, sisa waktu. */
 class SaldoAktifTable extends TableWidget
 {
+    use RefreshesAfterKimaiSync;
+
     protected static ?int $sort = 4;
 
     protected int|string|array $columnSpan = 'full';
@@ -63,7 +67,7 @@ class SaldoAktifTable extends TableWidget
                 Action::make('pakai')
                     ->label('Pakai')
                     ->icon('heroicon-m-arrow-right')
-                    ->url(fn () => \App\Filament\Resources\LeaveClaims\LeaveClaimResource::getUrl('create')),
+                    ->url(fn () => LeaveClaimResource::getUrl('create')),
             ])
             ->paginated(false)
             ->emptyStateHeading('Belum ada saldo aktif')
