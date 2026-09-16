@@ -884,4 +884,58 @@ class KimaiSyncTest extends TestCase
         $this->assertSame('22:00', substr((string) $record->end_time, 0, 5));
         $this->assertSame(240, $record->duration_raw_minutes);
     }
+
+    /** Empat entri @1j50m — satu sesi 7j20m yang bukan kelipatan jam. */
+    private function sesiTujuhJamDuaPuluh(): array
+    {
+        return [
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '19:50'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '19:50', '21:40'),
+            $this->kimaiSlot(3, self::WEDNESDAY, '21:40', '23:30'),
+            $this->kimaiSlot(4, self::WEDNESDAY, '23:30', '01:20'),
+        ];
+    }
+
+    #[Test]
+    public function br_04_pembulatan_berlaku_sekali_untuk_seluruh_sesi(): void
+    {
+        $user = $this->kimaiUser(rounding: true);
+
+        $this->fakeKimai($this->sesiTujuhJamDuaPuluh());
+        $this->sync($user);
+
+        $record = OvertimeRecord::firstOrFail();
+
+        // 440 menit dibulatkan SEKALI jadi 420 (7 jam).
+        //
+        // Angka ini sengaja 420, bukan 480. Sebelum peleburan, empat entri ini jadi
+        // empat record dan MASING-MASING dibulatkan: 4 × round(110/60) = 4 × 2 jam =
+        // 480 menit, cukup untuk Tier2 dan uang makan Rp 100.000. Itu menggelembungkan
+        // hak sampai 40 menit, dan membuat besarnya bergantung pada berapa kali Kimai
+        // memecah sesinya — lembur yang sama persis bisa bernilai beda hanya karena
+        // pecahannya beda. Jangan "perbaiki" 420 jadi 480 (BR-04).
+        $this->assertSame(440, $record->duration_raw_minutes);
+        $this->assertSame(420, $record->duration_effective_minutes);
+        $this->assertTrue($record->rounding_applied);
+
+        $this->assertSame(Tier::Tier1, $record->tier);
+        $this->assertSame(50_000, $record->meal_allowance_amount);
+    }
+
+    #[Test]
+    public function br_04_tanpa_pembulatan_sesi_gabungan_tidak_digeser(): void
+    {
+        $user = $this->kimaiUser(rounding: false);
+
+        $this->fakeKimai($this->sesiTujuhJamDuaPuluh());
+        $this->sync($user);
+
+        $record = OvertimeRecord::firstOrFail();
+
+        // Data yang sama persis: 420 di test sebelumnya benar-benar milik pembulatan,
+        // bukan efek samping peleburan sesi.
+        $this->assertSame(440, $record->duration_raw_minutes);
+        $this->assertSame(440, $record->duration_effective_minutes);
+        $this->assertFalse($record->rounding_applied);
+    }
 }

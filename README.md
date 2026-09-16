@@ -197,7 +197,7 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 php artisan test
 ```
 
-195 test, 760 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
+197 test, 768 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
 
 ```bash
 php artisan test --filter=br_13     # clamping akhir bulan
@@ -273,7 +273,7 @@ Command itu bekerja murni dari database, tidak menghubungi Kimai, dan boleh dija
 berkali-kali. Catatan yang sudah kamu edit, yang sudah diajukan, atau yang saldonya
 sudah dipakai klaim tidak akan disentuh — ketiganya dilaporkan beserta alasannya.
 
-### Empat hal yang mudah mengagetkan
+### Lima hal yang mudah mengagetkan
 
 - **Durasi bisa lebih pendek dari selisih jam.** 19:00–23:00 dengan istirahat 30
   menit tercatat 3 jam 30 menit, karena `duration` dari Kimai sudah bersih dari
@@ -281,6 +281,10 @@ sudah dipakai klaim tidak akan disentuh — ketiganya dilaporkan beserta alasann
 - **Jeda antar entri juga muncul sebagai istirahat.** Entri 18:00–20:00 dan
   21:00–23:00 jadi satu catatan 18:00–23:00 berdurasi 4 jam, dengan istirahat 1 jam
   (SY-24). Jam kosong di tengah tidak dihitung sebagai lembur.
+- **Kalau pembulatan nyala, jamnya bisa turun dibanding sebelum peleburan.** Empat
+  entri @1j50m dulu dibulatkan satu-satu jadi 4×2 jam = 8 jam; sekarang satu sesi
+  7j20m dibulatkan sekali jadi 7 jam. Yang sekarang yang benar — yang lama membuat
+  hak lembur bergantung pada berapa kali Kimai memecah sesinya (BR-04).
 - **Record yang kamu edit tidak pernah ditimpa lagi.** Sekali disentuh manusia,
   record itu keluar dari jangkauan sync selamanya (SY-14) — dan pada catatan
   gabungan itu membekukan seluruh sesinya, termasuk entri yang baru kamu tambahkan
