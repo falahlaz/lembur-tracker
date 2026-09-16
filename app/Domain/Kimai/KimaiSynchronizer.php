@@ -4,9 +4,6 @@ namespace App\Domain\Kimai;
 
 use App\Domain\Kimai\Exceptions\KimaiException;
 use App\Domain\Lembur\BalanceMaintenance;
-use App\Domain\Lembur\DurationCalculator;
-use App\Enums\OvertimeStatus;
-use App\Enums\Source;
 use App\Enums\SyncAction;
 use App\Enums\SyncStatus;
 use App\Enums\SyncTrigger;
@@ -19,33 +16,25 @@ use Throwable;
 /**
  * Orkestrator sync. Menjalankan alur PRD §8 langkah 1–8.
  *
- * SY-19 — setiap entri diproses dalam transaksinya sendiri, sehingga satu entri
- * bermasalah tidak menggagalkan seluruh batch dan job boleh diulang kapan saja.
+ * SY-23 — unit kerjanya SESI, bukan entri. Kimai membatasi satu timesheet maksimal
+ * 2 jam, jadi lembur 8 jam datang sebagai empat entri; kalau masing-masing jadi
+ * record sendiri, yang melewati tengah malam pecah ke dua tanggal dan tier-nya salah.
+ * SessionGrouper yang memutuskan entri mana milik sesi mana, dan SessionWriter yang
+ * memetakannya ke record beserta seluruh pagarnya. Yang tersisa di sini adalah
+ * urusan satu kali jalan: rentang, fetch, saringan, dan pelaporan.
  *
- * Record ditulis lewat OvertimeRecord::create()/save() biasa, BUKAN query
- * langsung: dengan begitu OvertimeRecordObserver tetap jalan dan
- * OvertimeDayCalculator yang menghitung tier, uang makan, dan saldo (BR-02/07).
- * Sync tidak pernah menyentuh satu pun kolom hasil hitungan.
+ * SY-19 — setiap SESI diproses dalam transaksinya sendiri, sehingga satu sesi
+ * bermasalah tidak menggagalkan seluruh batch dan job boleh diulang kapan saja.
  */
 class KimaiSynchronizer
 {
-    /**
-     * SY-14 — menandai bahwa tulisan yang sedang terjadi berasal dari sync, bukan
-     * dari manusia, sehingga observer tidak menyalakan `locally_modified`.
-     * Meniru guard OvertimeDayCalculator::isRecalculating().
-     */
-    private static bool $syncing = false;
-
     public function __construct(
         private readonly KimaiClient $client,
         private readonly SyncRangeResolver $ranges,
+        private readonly SessionGrouper $grouper,
+        private readonly SessionWriter $writer,
         private readonly BalanceMaintenance $maintenance,
     ) {}
-
-    public static function isSyncing(): bool
-    {
-        return self::$syncing;
-    }
 
     public function run(User $user, SyncTrigger $trigger = SyncTrigger::Manual): SyncRun
     {
@@ -68,8 +57,10 @@ class KimaiSynchronizer
             $eligible = $this->filter($entries, $run);
             $run->count_fetched = count($entries);
 
-            foreach ($eligible as $entry) {
-                $this->processOne($user, $run, $entry);
+            $sessions = $this->grouper->group($eligible, $this->knownGroupKeys($user, $range));
+
+            foreach ($sessions as $session) {
+                $this->processSession($user, $run, $session, $this->grouper->claimedElsewhere($sessions, $session));
             }
         } catch (KimaiException $e) {
             $this->fail($run, $e->userMessage());
@@ -139,134 +130,55 @@ class KimaiSynchronizer
         return $keep;
     }
 
-    private function processOne(User $user, SyncRun $run, KimaiTimesheet $entry): void
-    {
-        try {
-            self::$syncing = true;
-
-            DB::transaction(function () use ($user, $run, $entry) {
-                $existing = OvertimeRecord::query()
-                    ->where('user_id', $user->id)
-                    ->where('kimai_timesheet_id', $entry->id)
-                    ->first();
-
-                $existing === null
-                    ? $this->createFrom($user, $run, $entry)
-                    : $this->updateFrom($run, $entry, $existing);
-            });
-        } catch (Throwable $e) {
-            // §10 — entri gagal ditandai, job lanjut; run berakhir `partial`.
-            $this->record($run, $entry, SyncAction::Failed, mb_substr($e->getMessage(), 0, 200));
-        } finally {
-            self::$syncing = false;
-        }
-    }
-
-    private function createFrom(User $user, SyncRun $run, KimaiTimesheet $entry): void
-    {
-        // SY-15 — dua catatan yang bertabrakan untuk jam yang sama adalah hal yang
-        // harus dilihat manusia. Sistem tidak menebak mana yang benar.
-        //
-        // Pemeriksaan ini WAJIB di sini: aturan overlap F-02 hanya hidup sebagai
-        // validasi form Filament, jadi tulisan programatik tidak terlindungi.
-        $clash = $this->findClash($user, $entry);
-
-        if ($clash !== null) {
-            $this->record($run, $entry, SyncAction::Skipped, "bentrok dengan catatan manual #{$clash->id}");
-
-            return;
-        }
-
-        $record = new OvertimeRecord;
-        $record->fill([
-            'user_id' => $user->id,
-            'overtime_date' => $entry->overtimeDate()->toDateString(),
-            'start_time' => $entry->startTime(),
-            'end_time' => $entry->endTime(),
-            'work_description' => $entry->workDescription(),
-            'evidence_url' => $entry->evidenceUrl(),
-            'status' => OvertimeStatus::Recorded,
-            'source' => Source::Kimai,
-            'kimai_timesheet_id' => $entry->id,
-            'kimai_project_id' => $entry->projectId,
-            'kimai_activity_id' => $entry->activityId,
-            'break_minutes' => $entry->breakMinutes(),
-            // SY-12 — deep link Kimai membuktikan jam kerja, tetapi SOP §6 tetap
-            // mewajibkan SPL dan timesheet. Link ini pengisi sementara.
-            'evidence_needs_review' => true,
-        ]);
-
-        $this->stampKimai($record, $entry);
-        $record->save();
-
-        $this->record($run, $entry, SyncAction::Created, null, $record);
-    }
-
-    private function updateFrom(SyncRun $run, KimaiTimesheet $entry, OvertimeRecord $record): void
-    {
-        // SY-14 — sekali user menyentuhnya, sync tidak pernah menimpanya lagi.
-        if ($record->locally_modified) {
-            $this->record($run, $entry, SyncAction::Skipped, 'ada perubahan lokal', $record);
-
-            return;
-        }
-
-        if ($record->status !== OvertimeStatus::Recorded) {
-            $this->record($run, $entry, SyncAction::Skipped, 'sudah diajukan/disetujui', $record);
-
-            return;
-        }
-
-        $record->fill([
-            'overtime_date' => $entry->overtimeDate()->toDateString(),
-            'start_time' => $entry->startTime(),
-            'end_time' => $entry->endTime(),
-            'work_description' => $entry->workDescription(),
-            'kimai_project_id' => $entry->projectId,
-            'kimai_activity_id' => $entry->activityId,
-            'break_minutes' => $entry->breakMinutes(),
-        ]);
-
-        $this->stampKimai($record, $entry);
-
-        // `synced_at` selalu berubah, jadi ia tidak boleh ikut menentukan
-        // "identik" — kalau ikut, tidak akan pernah ada entri `tidak berubah`.
-        $changed = collect($record->getDirty())->except(['synced_at'])->isNotEmpty();
-
-        if (! $changed) {
-            $record->save();
-            $this->record($run, $entry, SyncAction::Unchanged, null, $record);
-
-            return;
-        }
-
-        $record->save();
-        $this->record($run, $entry, SyncAction::Updated, null, $record);
-    }
-
     /**
-     * SY-10 — kolom hasil hitungan tidak fillable, jadi durasi dari Kimai
-     * ditempelkan eksplisit di luar fill().
+     * SY-23 — pembuka jendela yang sudah tersimpan dari sync sebelumnya.
+     *
+     * Tanpa ini, sync yang memajukan watermark lewat tengah malam membuat entri pagi
+     * berikutnya kehilangan jejak sesinya: jendela "kemarin 18:00 → hari ini 09:00"
+     * tidak terlihat terbuka karena pembukanya tidak ikut ditarik lagi, dan lembur
+     * dini hari itu salah mendarat sebagai record sendiri.
+     *
+     * Batas bawahnya mundur satu hari justru untuk menjangkau anchor yang lebih tua
+     * dari `range_start`.
+     *
+     * @return array<int, string>
      */
-    private function stampKimai(OvertimeRecord $record, KimaiTimesheet $entry): void
-    {
-        $record->kimai_duration_minutes = $entry->durationMinutes();
-        $record->synced_at = now();
-    }
-
-    /** SY-15 — bentrok jam dengan record lain di tanggal yang sama (aturan F-02). */
-    private function findClash(User $user, KimaiTimesheet $entry): ?OvertimeRecord
+    private function knownGroupKeys(User $user, SyncRange $range): array
     {
         return OvertimeRecord::query()
             ->where('user_id', $user->id)
-            ->whereDate('overtime_date', $entry->overtimeDate()->toDateString())
-            ->get()
-            ->first(fn (OvertimeRecord $r) => DurationCalculator::overlaps(
-                $entry->startTime(),
-                $entry->endTime(),
-                (string) $r->start_time,
-                (string) $r->end_time,
-            ));
+            ->whereNotNull('kimai_group_key')
+            ->whereBetween('overtime_date', [
+                $range->begin->subDay()->toDateString(),
+                $range->end->toDateString(),
+            ])
+            ->pluck('kimai_group_key')
+            ->all();
+    }
+
+    private function processSession(User $user, SyncRun $run, OvertimeSession $session, array $claimedElsewhere): void
+    {
+        try {
+            $result = DB::transaction(fn () => $this->writer->write($user, $session, $claimedElsewhere));
+
+            $this->logSession($run, $session, $result->action, $result->reason, $result->record);
+        } catch (Throwable $e) {
+            // §10 — sesi gagal ditandai, job lanjut; run berakhir `partial`.
+            $this->logSession($run, $session, SyncAction::Failed, mb_substr($e->getMessage(), 0, 200));
+        }
+    }
+
+    /** Satu baris jejak per entri timesheet yang benar-benar ditarik run ini. */
+    private function logSession(
+        SyncRun $run,
+        OvertimeSession $session,
+        SyncAction $action,
+        ?string $reason = null,
+        ?OvertimeRecord $record = null,
+    ): void {
+        foreach ($session->entries as $entry) {
+            $this->record($run, $entry, $action, $reason, $record);
+        }
     }
 
     private function record(
@@ -288,15 +200,28 @@ class KimaiSynchronizer
 
     private function close(SyncRun $run): void
     {
+        // SY-23 — `created`/`updated` dihitung per RECORD, bukan per baris item.
+        // Empat entri Kimai yang melebur jadi satu lembur harus terbaca "1 lembur
+        // baru", bukan "4 lembur baru"; yang dilewati dan yang gagal memang per entri.
+        $run->count_created = $this->countRecords($run, SyncAction::Created);
+        $run->count_updated = $this->countRecords($run, SyncAction::Updated);
+
         $tally = $run->tally();
 
-        $run->count_created = $tally[SyncAction::Created->value] ?? 0;
-        $run->count_updated = $tally[SyncAction::Updated->value] ?? 0;
         $run->count_skipped = $tally[SyncAction::Skipped->value] ?? 0;
         $run->count_failed = $tally[SyncAction::Failed->value] ?? 0;
         $run->status = $run->count_failed > 0 ? SyncStatus::Partial : SyncStatus::Success;
         $run->finished_at = now();
         $run->save();
+    }
+
+    private function countRecords(SyncRun $run, SyncAction $action): int
+    {
+        return $run->items()
+            ->where('action', $action->value)
+            ->whereNotNull('overtime_record_id')
+            ->distinct()
+            ->count('overtime_record_id');
     }
 
     /**

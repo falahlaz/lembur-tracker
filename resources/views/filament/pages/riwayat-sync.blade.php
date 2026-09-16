@@ -26,10 +26,16 @@
                                 <th class="py-1 pe-4 font-medium">Tanggal</th>
                                 <th class="py-1 pe-4 font-medium">Durasi</th>
                                 <th class="py-1 pe-4 font-medium">Tindakan</th>
+                                <th class="py-1 pe-4 font-medium">Lembur</th>
                                 <th class="py-1 font-medium">Alasan</th>
                             </tr>
                         </thead>
                         <tbody>
+                            {{-- SY-23 — Kimai membatasi satu timesheet maksimal 2 jam, jadi
+                                 beberapa baris di sini sering menunjuk SATU lembur yang sama.
+                                 Tanpa keterangan itu, "4 timesheet, 1 lembur" terbaca seperti
+                                 data hilang. --}}
+                            @php($anggota = $run->items->whereNotNull('overtime_record_id')->countBy('overtime_record_id'))
                             @foreach ($run->items as $item)
                                 <tr class="border-t border-gray-100 dark:border-white/5">
                                     <td class="py-1.5 pe-4 tabular-nums">#{{ $item->kimai_timesheet_id }}</td>
@@ -44,17 +50,23 @@
                                             {{ $item->action->getLabel() }}
                                         </x-filament::badge>
                                     </td>
-                                    <td class="py-1.5 text-gray-500">
+                                    <td class="py-1.5 pe-4">
                                         @if ($item->overtimeRecord)
-                                            {{-- Setiap baris dibuat/diperbarui menautkan ke record hasilnya. --}}
+                                            {{-- Setiap baris menautkan ke lembur hasilnya. --}}
                                             <a class="text-primary-600 dark:text-primary-400 hover:underline"
                                                href="{{ \App\Filament\Resources\OvertimeRecords\OvertimeRecordResource::getUrl('edit', ['record' => $item->overtimeRecord]) }}">
                                                 Lihat lembur
                                             </a>
+                                            @if (($anggota[$item->overtime_record_id] ?? 1) > 1)
+                                                <span class="text-gray-500">
+                                                    · digabung dari {{ $anggota[$item->overtime_record_id] }} timesheet
+                                                </span>
+                                            @endif
                                         @else
-                                            {{ $item->reason ?? '—' }}
+                                            <span class="text-gray-500">—</span>
                                         @endif
                                     </td>
+                                    <td class="py-1.5 text-gray-500">{{ $item->reason ?? '—' }}</td>
                                 </tr>
                             @endforeach
                         </tbody>

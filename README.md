@@ -170,10 +170,13 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 | `KimaiClient` | §4 — satu-satunya tempat token menyentuh jaringan |
 | `KimaiTimesheet` | SY-16 — parse offset lalu konversi ke WIB |
 | `SyncRangeResolver` | SY-02–SY-04 — rentang yang ditarik, berbasis watermark |
-| `KimaiSynchronizer` | SY-05–SY-15 — filter, dedup, konflik, laporan |
+| `SessionGrouper` | SY-23 — entri mana milik sesi lembur yang mana |
+| `OvertimeSession` | SY-23/SY-24 — satu sesi: jam, durasi gabungan, istirahat |
+| `SessionWriter` | SY-13–SY-15, SY-25 — sesi → record, beserta seluruh pagarnya |
+| `KimaiSynchronizer` | SY-05–SY-07 — rentang, fetch, filter, laporan |
 | `KimaiConnection` | F-11 — simpan/tes/hapus API key |
 
-### Empat hal yang paling mudah salah
+### Enam hal yang paling mudah salah
 
 1. **Hak melekat pada TANGGAL, bukan record** (BR-02 + BR-07). Menyimpan, mengubah,
    atau menghapus satu record memicu hitung ulang seluruh tanggal itu.
@@ -190,6 +193,12 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
    berbeda dari selisih jam. Observer DAN `OvertimeDayCalculator` sama-sama
    memanggil method itu; menghitung sendiri dari `start_time`/`end_time` di salah
    satunya akan menimpa angka dari Kimai tanpa satu pun pesan error.
+6. **Satu entri Kimai ≠ satu lembur** (SY-23). Kimai membatasi satu timesheet
+   maksimal 2 jam, jadi lembur 8 jam datang sebagai empat entri. `SessionGrouper`
+   satu-satunya yang memutuskan pengelompokannya dan `SessionWriter` satu-satunya
+   yang menulisnya — sync harian dan `lemburku:kimai:regroup` sama-sama lewat situ,
+   supaya aturan "kapan data user boleh ditimpa" tidak punya dua salinan yang
+   berbeda perlahan.
 
 ---
 
@@ -199,7 +208,7 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 php artisan test
 ```
 
-165 test, 646 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
+204 test, 816 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
 
 ```bash
 php artisan test --filter=br_13     # clamping akhir bulan
@@ -238,13 +247,63 @@ tersembunyi, lalu melaporkan versi Kimai, nama parameter urutan yang diterima
 dituangkan ke `KIMAI_ORDER_PARAM` dan `KIMAI_TAGS` di `.env` — tidak ada kode
 yang perlu diubah.
 
-Dua hal yang mudah mengagetkan:
+### Satu sesi lembur = satu catatan
+
+Kimai membatasi satu timesheet **maksimal 2 jam**, jadi lembur 4 jam datang sebagai
+dua entri dan lembur 8 jam sebagai empat. Yang menentukan entri mana milik sesi yang
+sama adalah jendela lemburnya, bukan jumlah entrinya:
+
+| | Jendela | Lewat tengah malam |
+|---|---|---|
+| **Hari kerja** | 18:00 hari ini → 09:00 besok | ikut digabung ke tanggal mulai |
+| **Weekend** | seluruh hari kalender | jadi catatan sendiri di tanggal berikutnya |
+
+Yang menentukan aturan mana yang dipakai adalah **hari saat jendela dibuka**. Jumat
+18:00 → Sabtu 03:00 jadi SATU catatan di hari Jumat, karena jendelanya dibuka di hari
+kerja. Minggu 20:00 → Senin 02:00 jadi DUA catatan, karena jendelanya dibuka di
+weekend.
+
+Jendela hari kerja hanya terbuka kalau ada entri yang **membukanya** — yaitu entri
+yang mulai jam 18:00 atau lebih. Lembur Kamis pagi jam 08:00 tetap milik hari Kamis
+selama Rabu malam memang tidak ada lembur. Batas 18:00 dan 09:00 sendiri diambil dari
+`work_end_time` dan `work_start_time` di **Pengaturan → Aturan Lembur**, jadi bisa
+digeser tanpa mengubah kode.
+
+Entri hari kerja yang jatuh di dalam jam kerja (misal Selasa 14:00–16:00) tetap
+diimpor, hanya tidak digabung ke sesi mana pun.
+
+Record lembur yang terlanjur masuk dengan skema lama — satu entri Kimai satu catatan —
+digabung dengan:
+
+```bash
+php artisan lemburku:kimai:regroup --dry-run   # lihat rencananya dulu
+php artisan lemburku:kimai:regroup
+```
+
+Command itu bekerja murni dari database, tidak menghubungi Kimai, dan boleh dijalankan
+berkali-kali. Catatan yang sudah kamu edit, yang sudah diajukan, atau yang saldonya
+sudah dipakai klaim tidak akan disentuh — ketiganya dilaporkan beserta alasannya.
+
+### Lima hal yang mudah mengagetkan
 
 - **Durasi bisa lebih pendek dari selisih jam.** 19:00–23:00 dengan istirahat 30
   menit tercatat 3 jam 30 menit, karena `duration` dari Kimai sudah bersih dari
   `break` (SY-10). Istirahatnya ditampilkan supaya selisihnya bisa dijelaskan.
+- **Jeda antar entri juga muncul sebagai istirahat.** Entri 18:00–20:00 dan
+  21:00–23:00 jadi satu catatan 18:00–23:00 berdurasi 4 jam, dengan istirahat 1 jam
+  (SY-24). Jam kosong di tengah tidak dihitung sebagai lembur.
+- **Kalau pembulatan nyala, jamnya bisa turun dibanding sebelum peleburan.** Empat
+  entri @1j50m dulu dibulatkan satu-satu jadi 4×2 jam = 8 jam; sekarang satu sesi
+  7j20m dibulatkan sekali jadi 7 jam. Yang sekarang yang benar — yang lama membuat
+  hak lembur bergantung pada berapa kali Kimai memecah sesinya (BR-04).
 - **Record yang kamu edit tidak pernah ditimpa lagi.** Sekali disentuh manusia,
-  record itu keluar dari jangkauan sync selamanya (SY-14).
+  record itu keluar dari jangkauan sync selamanya (SY-14) — dan pada catatan
+  gabungan itu membekukan seluruh sesinya, termasuk entri yang baru kamu tambahkan
+  di Kimai setelahnya.
+- **Menghapus entri di Kimai tidak menghapus lemburnya di sini.** Entri yang hilang
+  dari respons belum tentu terhapus: bisa jadi timernya dijalankan lagi, atau tagnya
+  dilepas. Menebak salah terlalu mahal, jadi sync tidak pernah membuang anggota sesi
+  yang sudah tersimpan — hapus catatannya sendiri kalau memang tidak berlaku.
 
 ---
 

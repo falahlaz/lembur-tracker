@@ -2,7 +2,7 @@
 
 namespace App\Observers;
 
-use App\Domain\Kimai\KimaiSynchronizer;
+use App\Domain\Kimai\SessionWriter;
 use App\Domain\Lembur\DurationCalculator;
 use App\Domain\Lembur\OvertimeDayCalculator;
 use App\Domain\Lembur\PayrollPeriodResolver;
@@ -71,7 +71,7 @@ class OvertimeRecordObserver
             return;
         }
 
-        if (KimaiSynchronizer::isSyncing()) {
+        if (SessionWriter::isWriting()) {
             return;
         }
 
@@ -82,7 +82,7 @@ class OvertimeRecordObserver
 
     /**
      * SY-14 — hanya menyala untuk perubahan yang datang dari manusia. Sync sendiri
-     * menulis lewat guard KimaiSynchronizer::isSyncing(), jadi pembaruan rutin
+     * menulis lewat guard SessionWriter::isWriting(), jadi pembaruan rutin
      * dari Kimai tidak mengunci recordnya sendiri.
      *
      * Sekali menyala tidak pernah padam: tidak ada cabang yang mengembalikannya
@@ -94,7 +94,7 @@ class OvertimeRecordObserver
             return;
         }
 
-        if (KimaiSynchronizer::isSyncing()) {
+        if (SessionWriter::isWriting()) {
             return;
         }
 

@@ -103,7 +103,7 @@ class OvertimeRecordsTable
                         TextColumn::make('source')
                             ->label('Sumber')
                             ->formatStateUsing(fn (OvertimeRecord $r) => $r->isFromKimai()
-                                ? 'Dari Kimai · timesheet #'.$r->kimai_timesheet_id
+                                ? 'Dari Kimai · '.self::asalKimai($r)
                                     .($r->locally_modified ? ' (sudah diedit, tidak ikut sync lagi)' : '')
                                 : 'Dicatat manual')
                             ->color('gray')
@@ -214,5 +214,21 @@ class OvertimeRecordsTable
             ->emptyStateHeading('Belum ada lembur tercatat')
             ->emptyStateDescription('Catat lembur pertamamu untuk mulai menghitung uang makan dan cuti pengganti.')
             ->emptyStateIcon('heroicon-o-clock');
+    }
+
+    /**
+     * SY-23 — satu lembur bisa berasal dari beberapa timesheet, karena Kimai
+     * membatasi satu entri maksimal 2 jam. Menyebut satu nomor saja seperti dulu
+     * membuat record 8 jam terlihat seperti salah data.
+     */
+    private static function asalKimai(OvertimeRecord $record): string
+    {
+        $ids = $record->kimaiEntries->pluck('kimai_timesheet_id');
+
+        if ($ids->count() <= 1) {
+            return 'timesheet #'.($ids->first() ?? $record->kimai_timesheet_id);
+        }
+
+        return $ids->count().' timesheet digabung (#'.$ids->implode(', #').')';
     }
 }

@@ -135,6 +135,33 @@ abstract class TestCase extends BaseTestCase
         ], $overrides);
     }
 
+    /**
+     * Satu entri Kimai pada tanggal dan jam tertentu. Jauh lebih terbaca daripada
+     * menyusun string ISO dengan offset berulang kali, dan test SY-23 memang penuh
+     * entri yang hanya berbeda jam.
+     */
+    protected function kimaiSlot(int $id, string $date, string $start, string $end, array $overrides = []): array
+    {
+        // Zona Kimai, bukan zona aplikasi: respons asli selalu membawa offset +0700,
+        // dan justru asimetri itu yang diuji SY-16. Memakai zona test (UTC) akan
+        // menggeser setiap jam tujuh jam ke depan.
+        $zone = (string) config('kimai.timezone');
+        $begin = Carbon::parse("{$date} {$start}", $zone);
+        $finish = Carbon::parse("{$date} {$end}", $zone);
+
+        // Jam selesai yang lebih kecil dari jam mulai berarti entri ini melewati
+        // tengah malam — persis kasus yang membuat sync lama salah tanggal.
+        if ($finish->lessThanOrEqualTo($begin)) {
+            $finish = $finish->addDay();
+        }
+
+        return $this->kimaiEntry(array_merge([
+            'id' => $id,
+            'begin' => $begin->format('Y-m-d\TH:i:sO'),
+            'end' => $finish->format('Y-m-d\TH:i:sO'),
+        ], $overrides));
+    }
+
     /** @var array<int, array<string, mixed>> entri yang sedang dilayani fake Kimai */
     protected array $kimaiEntries = [];
 

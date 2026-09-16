@@ -214,11 +214,27 @@ class KimaiSyncTest extends TestCase
     {
         $user = $this->kimaiUser();
 
+        // 25 HARI KERJA, masing-masing 10 sesi sejam jam 08:00–18:00 yang tidak saling
+        // bertabrakan (SY-15 tidak ikut campur). Weekend sengaja dilewati: di Sabtu
+        // dan Minggu seluruh hari adalah satu jendela lembur (SY-23), sehingga sepuluh
+        // entri sehari akan melebur jadi satu record dan cacahnya tidak lagi bulat.
+        // Yang diuji di sini paginasi, bukan pengelompokan.
+        $dates = [];
+        $cursor = CarbonImmutable::parse('2026-09-11');
+
+        while (count($dates) < 25) {
+            if (! $cursor->isSaturday() && ! $cursor->isSunday()) {
+                $dates[] = $cursor->toDateString();
+            }
+
+            $cursor = $cursor->subDay();
+        }
+
         $entries = [];
         for ($i = 0; $i < 250; $i++) {
-            // 25 tanggal berturut-turut sejak 19 Agustus, masing-masing 10 sesi
-            // sejam yang tidak saling bertabrakan (SY-15 tidak ikut campur).
-            $date = CarbonImmutable::parse('2026-08-19')->addDays(intdiv($i, 10))->toDateString();
+            $date = $dates[intdiv($i, 10)];
+            // Semuanya mulai sebelum jam pulang, jadi tidak ada satu pun yang MEMBUKA
+            // jendela lembur malam — setiap entri berdiri sendiri.
             $hour = 8 + ($i % 10);
             $entries[] = $this->kimaiEntry([
                 'id' => 1000 + $i,
@@ -513,5 +529,413 @@ class KimaiSyncTest extends TestCase
         }
 
         $this->assertSame(SyncRun::KEEP_PER_USER, SyncRun::where('user_id', $user->id)->count());
+    }
+
+    // =====================================================================
+    // SY-23 s/d SY-25 — satu sesi lembur = satu record, meski Kimai memecahnya
+    // jadi beberapa timesheet karena batas 2 jam per entri.
+    // =====================================================================
+
+    private const WEDNESDAY = '2026-09-09';
+
+    private const THURSDAY = '2026-09-10';
+
+    private const FRIDAY = '2026-09-11';
+
+    private const SATURDAY = '2026-09-12';
+
+    private const SUNDAY = '2026-09-06';
+
+    private const MONDAY = '2026-09-07';
+
+    private const TUESDAY = '2026-09-08';
+
+    #[Test]
+    public function sy_23_empat_entri_lintas_tengah_malam_jadi_satu_lembur(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00'),
+            $this->kimaiSlot(3, self::WEDNESDAY, '22:00', '00:00'),
+            $this->kimaiSlot(4, self::THURSDAY, '00:00', '02:00'),
+        ]);
+
+        $this->sync($user);
+
+        // Inilah bug yang diperbaiki: dulu ini jadi 3 record di Rabu (6 jam, Tier1)
+        // plus 1 record di Kamis (2 jam) — dua-duanya salah.
+        $this->assertSame(1, OvertimeRecord::count());
+
+        $record = OvertimeRecord::first();
+        $this->assertSame(self::WEDNESDAY, $record->overtime_date->toDateString());
+        $this->assertSame('18:00', substr((string) $record->start_time, 0, 5));
+        $this->assertSame('02:00', substr((string) $record->end_time, 0, 5));
+        $this->assertSame(480, $record->duration_raw_minutes);
+        $this->assertSame(Tier::Tier2, $record->tier);
+        $this->assertSame(100_000, $record->meal_allowance_amount);
+        $this->assertSame([1, 2, 3, 4], $record->kimaiEntries->pluck('kimai_timesheet_id')->all());
+    }
+
+    #[Test]
+    public function sy_24_jeda_antar_entri_tercatat_sebagai_break(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '21:00', '23:00'),
+        ]);
+
+        $this->sync($user);
+
+        $record = OvertimeRecord::first();
+        $this->assertSame('18:00', substr((string) $record->start_time, 0, 5));
+        $this->assertSame('23:00', substr((string) $record->end_time, 0, 5));
+        // SY-10 — durasi memang lebih pendek dari selisih jam, dan `break_minutes`
+        // yang menjelaskan selisihnya.
+        $this->assertSame(60, $record->break_minutes);
+        $this->assertSame(240, $record->duration_raw_minutes);
+    }
+
+    #[Test]
+    public function sy_23_weekend_seluruh_hari_jadi_satu_lembur(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::SATURDAY, '09:00', '11:00'),
+            $this->kimaiSlot(2, self::SATURDAY, '13:00', '15:00'),
+        ]);
+
+        $this->sync($user);
+
+        $this->assertSame(1, OvertimeRecord::count());
+        $record = OvertimeRecord::first();
+        $this->assertSame(self::SATURDAY, $record->overtime_date->toDateString());
+        $this->assertSame(240, $record->duration_raw_minutes);
+        $this->assertSame(120, $record->break_minutes);
+    }
+
+    #[Test]
+    public function sy_23_jumat_malam_lewat_tengah_malam_tetap_milik_jumat(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::FRIDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::SATURDAY, '00:00', '03:00'),
+        ]);
+
+        $this->sync($user);
+
+        $this->assertSame(1, OvertimeRecord::count());
+        $this->assertSame(self::FRIDAY, OvertimeRecord::first()->overtime_date->toDateString());
+    }
+
+    #[Test]
+    public function sy_23_minggu_malam_ke_senin_jadi_dua_lembur(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::SUNDAY, '20:00', '22:00'),
+            $this->kimaiSlot(2, self::MONDAY, '00:00', '02:00'),
+        ]);
+
+        $this->sync($user);
+
+        $this->assertSame(
+            [self::SUNDAY, self::MONDAY],
+            OvertimeRecord::orderBy('overtime_date')->get()
+                ->map(fn ($r) => $r->overtime_date->toDateString())->all(),
+        );
+    }
+
+    #[Test]
+    public function sy_23_entri_siang_hari_kerja_tetap_jadi_record_sendiri(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::TUESDAY, '14:00', '16:00'),
+            $this->kimaiSlot(2, self::TUESDAY, '19:00', '21:00'),
+        ]);
+
+        $this->sync($user);
+
+        $this->assertSame(2, OvertimeRecord::count());
+        $this->assertSame(
+            ['14:00', '19:00'],
+            OvertimeRecord::orderBy('start_time')->get()
+                ->map(fn ($r) => substr((string) $r->start_time, 0, 5))->all(),
+        );
+    }
+
+    #[Test]
+    public function sy_25_sesi_separuh_dilanjutkan_pada_sync_berikutnya(): void
+    {
+        $user = $this->kimaiUser();
+
+        // Sync pertama jalan saat orangnya masih bekerja: baru satu entri yang ada.
+        $this->fakeKimai([$this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00')]);
+        $this->sync($user);
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00'),
+            $this->kimaiSlot(3, self::WEDNESDAY, '22:00', '00:00'),
+        ]);
+        $run = $this->sync($user->refresh());
+
+        // Recordnya MELUAS, bukan lahir kedua kalinya.
+        $this->assertSame(1, OvertimeRecord::count());
+        $record = OvertimeRecord::first();
+        $this->assertSame('00:00', substr((string) $record->end_time, 0, 5));
+        $this->assertSame(360, $record->duration_raw_minutes);
+        $this->assertSame(0, $run->count_created);
+        $this->assertSame(1, $run->count_updated);
+    }
+
+    #[Test]
+    public function sy_25_entri_dini_hari_menyusul_ke_sesi_yang_sudah_tersimpan(): void
+    {
+        // Jam dinding dimajukan ke Kamis pagi, supaya watermark sync pertama benar-benar
+        // mendarat di tanggal setelah jendela lembur itu dibuka — persis keadaan yang
+        // membuat pembukanya keluar dari jangkauan fetch berikutnya.
+        $this->freezeDate(self::THURSDAY);
+
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([$this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00')]);
+        $this->sync($user);
+        $this->assertSame(self::THURSDAY, $user->refresh()->kimai_synced_through->toDateString());
+
+        // Sync berikutnya hanya membawa entri dini hari Kamis — pembukanya tidak ikut
+        // ditarik lagi. Tanpa `knownGroupKeys`, lembur ini akan salah mendarat sebagai
+        // record sendiri di hari Kamis.
+        $this->fakeKimai([$this->kimaiSlot(2, self::THURSDAY, '01:00', '03:00')]);
+        $this->sync($user->refresh());
+
+        $this->assertSame(1, OvertimeRecord::count());
+        $record = OvertimeRecord::first();
+        $this->assertSame(self::WEDNESDAY, $record->overtime_date->toDateString());
+        $this->assertSame('03:00', substr((string) $record->end_time, 0, 5));
+        $this->assertSame([1, 2], $record->kimaiEntries->pluck('kimai_timesheet_id')->all());
+    }
+
+    #[Test]
+    public function sy_25_anggota_tersimpan_dan_anggota_baru_tetap_urut_jam(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([$this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00')]);
+        $this->sync($user);
+
+        // Sync kedua hanya membawa entri LANJUTANNYA; yang jam 18:00 hanya ada di
+        // database. Keduanya harus tetap terbaca sebagai 18:00 lebih dulu — kalau
+        // urutannya terbalik, jam mulai dan jam selesai record jadi sama besar dan
+        // lemburnya terbaca nol.
+        $this->fakeKimai([$this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00')]);
+        $this->sync($user->refresh());
+
+        $record = OvertimeRecord::first();
+        $this->assertSame('18:00', substr((string) $record->start_time, 0, 5));
+        $this->assertSame('22:00', substr((string) $record->end_time, 0, 5));
+        $this->assertSame(240, $record->duration_raw_minutes);
+        $this->assertSame(0, $record->break_minutes);
+    }
+
+    #[Test]
+    public function sy_25_entri_yang_digeser_keluar_jendela_pindah_ke_sesinya_sendiri(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00'),
+        ]);
+        $this->sync($user);
+        $this->assertSame(1, OvertimeRecord::count());
+
+        // Entri kedua diperbaiki di Kimai jadi siang hari — ia keluar dari jendela
+        // lembur malam dan sekarang berdiri sendiri.
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '13:00', '15:00'),
+        ]);
+        $this->sync($user->refresh());
+
+        // Dua record, dan entri kedua hanya menempel di salah satunya. Kalau ia
+        // tertinggal di record lama, lemburnya terhitung dua kali (BR-02).
+        $this->assertSame(2, OvertimeRecord::count());
+
+        $malam = OvertimeRecord::where('kimai_group_key', 'we:'.self::WEDNESDAY)->firstOrFail();
+        $this->assertSame([1], $malam->kimaiEntries->pluck('kimai_timesheet_id')->all());
+        $this->assertSame('20:00', substr((string) $malam->end_time, 0, 5));
+        $this->assertSame(120, $malam->duration_raw_minutes);
+
+        $siang = OvertimeRecord::where('kimai_group_key', 'ts:2')->firstOrFail();
+        $this->assertSame([2], $siang->kimaiEntries->pluck('kimai_timesheet_id')->all());
+        $this->assertSame('13:00', substr((string) $siang->start_time, 0, 5));
+    }
+
+    #[Test]
+    public function sy_15_bentrok_manual_melewatkan_seluruh_sesi(): void
+    {
+        $user = $this->kimaiUser();
+        $manual = $this->logOvertime($user, self::WEDNESDAY, '19:00', '20:00');
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00'),
+        ]);
+        $run = $this->sync($user);
+
+        // Satu sesi, satu keputusan: keduanya dilewati, bukan hanya yang bertabrakan.
+        $this->assertSame(1, OvertimeRecord::count());
+        $this->assertSame(2, $run->items()->where('action', SyncAction::Skipped)->count());
+        $this->assertStringContainsString(
+            "bentrok dengan catatan manual #{$manual->id}",
+            (string) $run->items()->first()->reason,
+        );
+    }
+
+    #[Test]
+    public function sy_14_perubahan_lokal_membekukan_seluruh_sesi(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([$this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00')]);
+        $this->sync($user);
+
+        $record = OvertimeRecord::first();
+        $record->work_description = 'Ditulis ulang oleh user';
+        $record->save();
+        $this->assertTrue($record->refresh()->locally_modified);
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00'),
+        ]);
+        $run = $this->sync($user->refresh());
+
+        // Anggota baru pun tidak masuk: menambahkannya berarti mengubah jam pada
+        // catatan yang sudah disentuh manusia.
+        $this->assertSame(1, OvertimeRecord::count());
+        $this->assertSame('20:00', substr((string) $record->refresh()->end_time, 0, 5));
+        $this->assertSame('Ditulis ulang oleh user', $record->work_description);
+        $this->assertSame('ada perubahan lokal', $run->items()->first()->reason);
+    }
+
+    #[Test]
+    public function sy_23_cacah_run_menyebut_lembur_bukan_timesheet(): void
+    {
+        $user = $this->kimaiUser();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00'),
+            $this->kimaiSlot(3, self::WEDNESDAY, '22:00', '00:00'),
+            $this->kimaiSlot(4, self::THURSDAY, '00:00', '02:00'),
+        ]);
+        $run = $this->sync($user);
+
+        // F-13 — "4 lembur baru" untuk satu lembur adalah kebohongan yang bikin panik.
+        $this->assertSame(4, $run->count_fetched);
+        $this->assertSame(1, $run->count_created);
+        $this->assertStringContainsString('1 lembur baru', $run->summary());
+        // Jejak per timesheet tetap utuh: empat baris menunjuk satu record yang sama.
+        $this->assertSame(4, SyncRunItem::where('sync_run_id', $run->id)->count());
+        $this->assertSame(1, SyncRunItem::where('sync_run_id', $run->id)
+            ->distinct()->count('overtime_record_id'));
+    }
+
+    #[Test]
+    public function sy_23_record_warisan_sync_lama_diserap_bukan_dibiarkan_bentrok(): void
+    {
+        $user = $this->kimaiUser();
+
+        // Record hasil sync 1:1 sebelum pengelompokan ada: tidak punya kunci grup
+        // maupun baris penghubung.
+        $legacy = OvertimeRecord::query()->create([
+            'user_id' => $user->id,
+            'overtime_date' => self::WEDNESDAY,
+            'start_time' => '18:00',
+            'end_time' => '20:00',
+            'work_description' => 'Lembur dari Kimai #1',
+            'evidence_url' => 'https://timesheet.codeoffice.net/en/timesheet/1/edit',
+            'status' => OvertimeStatus::Recorded,
+            'source' => Source::Kimai,
+            'kimai_timesheet_id' => 1,
+        ]);
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00'),
+        ]);
+        $this->sync($user);
+
+        // Diserap ke dalam sesinya, bukan dilewati sebagai "bentrok".
+        $this->assertSame(1, OvertimeRecord::count());
+        $record = OvertimeRecord::first();
+        $this->assertSame($legacy->id, $record->id, 'Record lama dipertahankan, bukan dibuat ulang.');
+        $this->assertSame('22:00', substr((string) $record->end_time, 0, 5));
+        $this->assertSame(240, $record->duration_raw_minutes);
+    }
+
+    /** Empat entri @1j50m — satu sesi 7j20m yang bukan kelipatan jam. */
+    private function sesiTujuhJamDuaPuluh(): array
+    {
+        return [
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '19:50'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '19:50', '21:40'),
+            $this->kimaiSlot(3, self::WEDNESDAY, '21:40', '23:30'),
+            $this->kimaiSlot(4, self::WEDNESDAY, '23:30', '01:20'),
+        ];
+    }
+
+    #[Test]
+    public function br_04_pembulatan_berlaku_sekali_untuk_seluruh_sesi(): void
+    {
+        $user = $this->kimaiUser(rounding: true);
+
+        $this->fakeKimai($this->sesiTujuhJamDuaPuluh());
+        $this->sync($user);
+
+        $record = OvertimeRecord::firstOrFail();
+
+        // 440 menit dibulatkan SEKALI jadi 420 (7 jam).
+        //
+        // Angka ini sengaja 420, bukan 480. Sebelum peleburan, empat entri ini jadi
+        // empat record dan MASING-MASING dibulatkan: 4 × round(110/60) = 4 × 2 jam =
+        // 480 menit, cukup untuk Tier2 dan uang makan Rp 100.000. Itu menggelembungkan
+        // hak sampai 40 menit, dan membuat besarnya bergantung pada berapa kali Kimai
+        // memecah sesinya — lembur yang sama persis bisa bernilai beda hanya karena
+        // pecahannya beda. Jangan "perbaiki" 420 jadi 480 (BR-04).
+        $this->assertSame(440, $record->duration_raw_minutes);
+        $this->assertSame(420, $record->duration_effective_minutes);
+        $this->assertTrue($record->rounding_applied);
+
+        $this->assertSame(Tier::Tier1, $record->tier);
+        $this->assertSame(50_000, $record->meal_allowance_amount);
+    }
+
+    #[Test]
+    public function br_04_tanpa_pembulatan_sesi_gabungan_tidak_digeser(): void
+    {
+        $user = $this->kimaiUser(rounding: false);
+
+        $this->fakeKimai($this->sesiTujuhJamDuaPuluh());
+        $this->sync($user);
+
+        $record = OvertimeRecord::firstOrFail();
+
+        // Data yang sama persis: 420 di test sebelumnya benar-benar milik pembulatan,
+        // bukan efek samping peleburan sesi.
+        $this->assertSame(440, $record->duration_raw_minutes);
+        $this->assertSame(440, $record->duration_effective_minutes);
+        $this->assertFalse($record->rounding_applied);
     }
 }
