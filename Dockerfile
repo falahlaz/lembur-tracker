@@ -50,8 +50,16 @@ COPY --from=assets /app/public/build ./public/build
 # tidak pernah jalan — tanpa baris ini panel tampil tanpa CSS.
 # chown: peran writer dipisah dari root supaya proses PHP tidak berjalan
 # sebagai root.
+# Komponen Alpine yang dimuat lewat `x-load` gagal tanpa suara kalau berkasnya
+# tidak ada: panel tetap ter-style dan tetap render, tapi setiap DatePicker
+# `native(false)` jadi input readonly yang kalendernya tak pernah terbuka dan
+# setiap Select `native(false)` jadi div kosong. Karena itu build harus gagal di
+# sini, bukan menghasilkan image yang rusaknya baru ketahuan dari layar user.
 RUN php artisan package:discover --ansi \
     && php artisan filament:upgrade \
+    && test -f public/js/filament/support/support.js \
+    && test -f public/js/filament/forms/components/select.js \
+    && test -f public/js/filament/forms/components/date-time-picker.js \
     && chown -R www-data:www-data storage bootstrap/cache
 
 USER www-data
