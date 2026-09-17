@@ -300,8 +300,24 @@ class UploadTimesheetPageTest extends TestCase
             $reader->sheetNames($path),
         );
 
-        $this->assertSame([], $book->issues);
-        $this->assertCount(2, $book->entries, 'Satu sel contoh per sheet.');
+        $this->assertSame([], $book->issues, 'Template tidak boleh menghasilkan satu pun keluhan.');
+        $this->assertCount(1, $book->entries, 'Satu sel contoh di sheet Daily.');
         $this->assertSame('12_PROJECT_MEETING', $book->entries[0]->activityName);
+        $this->assertSame(105, $book->projectId);
+
+        // Kolom tanggal terisi hari kerja periode berjalan, jadi tinggal diisi
+        // selnya tanpa mengetik tanggal satu per satu.
+        $grid = $reader->read($path, ['Daily', 'Overtime']);
+        $this->assertGreaterThan(5, count(array_filter($grid['Daily'][4] ?? [])));
+        $this->assertSame('', trim((string) ($grid['Daily'][4]['A'] ?? '')), 'Kolom A baris tanggal wajib kosong.');
+
+        // Kedua sheet membawa seluruh baris slotnya, termasuk 12 baris Overtime
+        // yang dulu tidak pernah terbaca importer lama.
+        $labelOvertime = array_filter(array_map(
+            fn (array $row) => $row['A'] ?? null,
+            $grid['Overtime'],
+        ));
+        $this->assertContains('10 PM - 12 PM', $labelOvertime);
+        $this->assertCount(12 + 2, $labelOvertime, '12 slot + 2 baris meta.');
     }
 }

@@ -367,8 +367,14 @@ ditebak. Nama yang tidak ketemu menandai barisnya sendiri beserta letak selnya; 
 tetap bisa dikirim.
 
 Format lama **`Activity ID: 8` tetap diterima**, jadi workbook periode sebelumnya masih bisa
-diunggah ulang. Tombol **Unduh template** di halaman upload menghasilkan contoh dalam format
-yang berlaku sekarang.
+diunggah ulang.
+
+Tombol **Unduh template** di halaman upload menghasilkan workbook kosong dalam format yang
+berlaku sekarang — kedua sheet beserta seluruh baris slotnya, dan kolom tanggal sudah terisi
+hari kerja periode payroll berjalan. Template itu dibangun dari kode, bukan berkas yang
+di-commit: berkas biner di repo tidak bisa direview, tidak bisa di-diff, dan langsung basi
+begitu formatnya bergeser. Ada test yang membuktikan template hasilnya bisa dibaca balik oleh
+parser aplikasi sendiri.
 
 Sebelum dipakai di instance baru, `php artisan lemburku:kimai:probe` sekarang ikut melaporkan
 jumlah project dan activity yang terlihat, dan apakah activity global perlu diambil terpisah.
