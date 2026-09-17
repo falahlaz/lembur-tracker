@@ -16,7 +16,16 @@ COPY . .
 # theme.css milik panel mengimpor dari vendor/filament, jadi tahap ini butuh
 # vendor juga — di build bersih (CI) direktori itu tidak ikut COPY . .
 COPY --from=vendor /app/vendor ./vendor
-RUN npm run build
+# CSS FilePond ikut lewat rantai impor theme.css -> filament/theme.css ->
+# forms/index.css -> dist/index.css, dan satu-satunya yang menyembunyikan input
+# berkas bawaan browser adalah `.filepond--browser { opacity: 0 }` di sana. Kalau
+# rantai itu tidak terkompilasi, field upload tampil sebagai "Choose File" polos
+# sementara sisa panel terlihat normal — jenis kerusakan yang paling lama tidak
+# ketahuan. Theme hasil build satu-satunya aset yang belum punya pagar, jadi
+# build harus gagal di sini.
+RUN npm run build \
+    && test -s public/build/manifest.json \
+    && grep -rq filepond public/build/assets
 
 # ---------- Tahap 3: runtime ----------
 FROM php:8.4-fpm-alpine AS runtime
@@ -60,6 +69,7 @@ RUN php artisan package:discover --ansi \
     && test -f public/js/filament/support/support.js \
     && test -f public/js/filament/forms/components/select.js \
     && test -f public/js/filament/forms/components/date-time-picker.js \
+    && test -f public/js/filament/forms/components/file-upload.js \
     && chown -R www-data:www-data storage bootstrap/cache
 
 USER www-data

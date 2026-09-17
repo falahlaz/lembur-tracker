@@ -11,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /** Satu sel workbook: apa yang akan dikirim, dan apa yang terjadi padanya. */
 #[Fillable([
     'timesheet_upload_id', 'user_id', 'sheet', 'cell_ref', 'slot_label', 'work_date',
-    'begin_at', 'end_at', 'duration_minutes', 'activity_id', 'description', 'tag',
+    'begin_at', 'end_at', 'duration_minutes', 'activity_id', 'activity_name', 'description', 'tag',
     'status', 'skip_reason', 'overridable', 'conflicting_kimai_id',
 ])]
 class TimesheetUploadEntry extends Model

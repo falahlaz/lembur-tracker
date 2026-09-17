@@ -116,6 +116,7 @@ curl -I http://localhost:8080/livewire/livewire.js                          # ha
 curl -I http://localhost:8080/js/filament/support/support.js                # harus 200
 curl -I http://localhost:8080/js/filament/forms/components/select.js        # harus 200
 curl -I http://localhost:8080/js/filament/forms/components/date-time-picker.js  # harus 200
+curl -I http://localhost:8080/js/filament/forms/components/file-upload.js   # harus 200
 ```
 
 Livewire menyajikan JS-nya lewat route, bukan berkas di `public/`. Kalau
@@ -173,6 +174,8 @@ Upload timesheet ke Kimai hidup di `app/Domain/Timesheet/`:
 | `DuplicateDetector` | UP-04 — slot yang sudah terisi di Kimai atau sudah pernah diupload |
 | `UploadDrafter` | UP-05 — pratinjau yang disimpan, bukan ditahan di memori |
 | `UploadPoster` | UP-06 — kirim per entri, beserta kebijakan kegagalannya |
+| `KimaiCatalog` | UP-07 — daftar project dan activity, dengan cache pendek per user |
+| `ActivityResolver` | UP-08 — nama activity di sheet jadi id Kimai |
 
 Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 
@@ -336,6 +339,39 @@ pemilik API key yang dipakai, jadi ini pekerjaan masing-masing orang — bukan a
 Entri sheet `Overtime` dikirim bertag `Overtime`, sehingga sync menariknya kembali jadi
 catatan lembur dengan sendirinya. Entri `Daily` tidak bertag dan berhenti di Kimai. Tidak
 ada jalur kedua yang menulis catatan lembur: Kimai tetap satu-satunya sumber kebenaran.
+
+### Project dan activity dipilih lewat nama
+
+Angka id tidak bisa diverifikasi mata, dan project Kimai berganti tiap tahun — salah satu
+digit berarti satu periode masuk ke project orang lain. Karena itu:
+
+- **Project** dipilih dari dropdown berisi nama, ditarik dari `/api/projects`. Baris
+  `Project ID` di workbook tetap dibaca dan jadi pilihan awalnya.
+- **Activity** ditulis sebagai nama di dalam sel:
+
+  ```
+  Activity: 31_DEV_FEATURE
+
+  Sprint 8 - MTA-1867
+  1. Review AI generated code
+  ```
+
+  Namanya diterjemahkan jadi id terhadap **project yang dipilih**, lewat `/api/activities`.
+  Activity global (yang tidak terikat project) ikut terjangkau — ia diambil lewat permintaan
+  terpisah lalu digabung, karena apakah filter `project=` sudah memuatnya berbeda antar versi
+  Kimai.
+
+Pencocokan namanya memaafkan besar-kecil huruf dan pemisah kata, jadi `31_DEV_FEATURE` dan
+`31 dev feature` dianggap sama. Nama yang cocok ke lebih dari satu activity **ditolak**, bukan
+ditebak. Nama yang tidak ketemu menandai barisnya sendiri beserta letak selnya; sisa berkas
+tetap bisa dikirim.
+
+Format lama **`Activity ID: 8` tetap diterima**, jadi workbook periode sebelumnya masih bisa
+diunggah ulang. Tombol **Unduh template** di halaman upload menghasilkan contoh dalam format
+yang berlaku sekarang.
+
+Sebelum dipakai di instance baru, `php artisan lemburku:kimai:probe` sekarang ikut melaporkan
+jumlah project dan activity yang terlihat, dan apakah activity global perlu diambil terpisah.
 
 ### Jam dibaca dari label, bukan dari nomor baris
 

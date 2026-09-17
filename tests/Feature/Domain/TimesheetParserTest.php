@@ -165,6 +165,70 @@ class TimesheetParserTest extends TestCase
     }
 
     #[Test]
+    public function sel_format_baru_membawa_nama_activity_bukan_id(): void
+    {
+        $teks = "Activity: 31_DEV_FEATURE\n\nSprint 8 - MTA-1867\n1. Review AI generated code";
+
+        $book = $this->parser->parse([
+            'Daily' => $this->sheet(self::SLOT_DAILY, ['B' => [0 => $teks]]),
+            'Overtime' => $this->sheet(self::SLOT_OVERTIME),
+        ]);
+
+        $entry = $book->entries[0];
+
+        $this->assertSame('31_DEV_FEATURE', $entry->activityName);
+        $this->assertNull($entry->activityId, 'Id diresolusi belakangan, bukan di parser.');
+        $this->assertSame("Sprint 8 - MTA-1867\n1. Review AI generated code", $entry->description);
+        $this->assertFalse($entry->isPostable(), 'Tanpa id, entri tidak boleh bisa dikirim.');
+    }
+
+    #[Test]
+    public function format_lama_dengan_activity_id_tetap_diterima(): void
+    {
+        // Workbook periode sebelumnya harus tetap bisa diunggah ulang.
+        $book = $this->parser->parse([
+            'Daily' => $this->sheet(self::SLOT_DAILY, ['B' => [0 => $this->sel(8, 'Sprint 8')]]),
+            'Overtime' => $this->sheet(self::SLOT_OVERTIME),
+        ]);
+
+        $entry = $book->entries[0];
+
+        $this->assertSame(8, $entry->activityId);
+        $this->assertNull($entry->activityName);
+        $this->assertSame('Sprint 8', $entry->description);
+    }
+
+    #[Test]
+    public function activity_id_tidak_pernah_terbaca_sebagai_nama(): void
+    {
+        // Pola nama menuntut ":" langsung setelah "Activity", jadi "Activity ID: 8"
+        // tidak boleh menghasilkan nama "ID: 8".
+        foreach (['Activity ID: 8', 'Activity ID : 8', 'activity id:8'] as $penanda) {
+            $book = $this->parser->parse([
+                'Daily' => $this->sheet(self::SLOT_DAILY, ['B' => [0 => $penanda."\n\nSprint 8"]]),
+                'Overtime' => $this->sheet(self::SLOT_OVERTIME),
+            ]);
+
+            $this->assertSame(8, $book->entries[0]->activityId, $penanda);
+            $this->assertNull($book->entries[0]->activityName, $penanda);
+        }
+    }
+
+    #[Test]
+    public function penanda_nama_dimaafkan_spasinya(): void
+    {
+        foreach (['Activity: Deploy', 'Activity:Deploy', 'activity :  Deploy'] as $penanda) {
+            $book = $this->parser->parse([
+                'Daily' => $this->sheet(self::SLOT_DAILY, ['B' => [0 => $penanda."\n\nRilis"]]),
+                'Overtime' => $this->sheet(self::SLOT_OVERTIME),
+            ]);
+
+            $this->assertSame('Deploy', $book->entries[0]->activityName, $penanda);
+            $this->assertSame('Rilis', $book->entries[0]->description, $penanda);
+        }
+    }
+
+    #[Test]
     public function sel_kosong_dilewati_tanpa_keluhan(): void
     {
         $book = $this->parser->parse([
@@ -186,7 +250,7 @@ class TimesheetParserTest extends TestCase
 
         $this->assertSame([], $book->entries);
         $this->assertCount(1, $book->issues);
-        $this->assertStringContainsString("tanpa 'Activity ID'", $book->issues[0]);
+        $this->assertStringContainsString("tanpa penanda 'Activity'", $book->issues[0]);
     }
 
     #[Test]

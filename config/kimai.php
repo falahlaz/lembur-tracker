@@ -108,4 +108,12 @@ return [
 
     'upload_post_delay_ms' => (int) env('KIMAI_UPLOAD_POST_DELAY_MS', 100),
 
+    /*
+    | Umur cache daftar project dan activity. Select Filament memanggil options()
+    | setiap kali komponen dirender, jadi tanpa cache satu halaman berarti belasan
+    | permintaan ke instance yang dipakai seluruh tim.
+    */
+
+    'catalog_ttl' => (int) env('KIMAI_CATALOG_TTL', 300),
+
 ];

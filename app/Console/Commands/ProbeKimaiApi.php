@@ -42,9 +42,10 @@ class ProbeKimaiApi extends Command
         $this->probeVersion($base, $token);
         $this->probeOrderParam($base, $token);
         $this->probeTagFilter($base, $token);
+        $this->probeCatalog($base, $token);
 
         $this->line('');
-        $this->comment('Tuangkan hasilnya ke .env: KIMAI_ORDER_PARAM, KIMAI_TAGS.');
+        $this->comment('Tuangkan hasilnya ke .env: KIMAI_ORDER_PARAM, KIMAI_TAGS, KIMAI_DEFAULT_PROJECT.');
 
         return self::SUCCESS;
     }
@@ -106,6 +107,85 @@ class ProbeKimaiApi extends Command
 
         $verdict = $filteredCount < $allCount ? 'menyaring' : 'TIDAK menyaring (filter aplikasi yang menahan)';
         $this->line("  tags[]        {$verdict} — {$filteredCount} dari {$allCount}");
+    }
+
+    /**
+     * Upload timesheet menerjemahkan nama project dan nama activity jadi id, jadi
+     * kedua endpoint itu ikut diperiksa di sini.
+     *
+     * `ignoreDates` penting: tanpa itu project yang tanggal selesainya sudah lewat
+     * hilang dari daftar — dan itu persis project periode lalu. Apakah filter
+     * `project=<id>` sudah ikut mengembalikan activity GLOBAL berbeda antar versi,
+     * jadi aplikasi mengambil keduanya terpisah; angka di bawah memperlihatkan
+     * apakah itu memang perlu di instance ini.
+     */
+    private function probeCatalog(string $base, string $token): void
+    {
+        $projects = $this->fetch($base, $token, '/api/projects', [
+            'visible' => 1, 'ignoreDates' => 1, 'orderBy' => 'name', 'order' => 'ASC',
+        ]);
+
+        if ($projects === null || ! $projects->successful()) {
+            $this->warn('  /api/projects  tidak terjangkau atau ditolak (HTTP '.($projects?->status() ?? 'gagal').')');
+
+            return;
+        }
+
+        $rows = (array) $projects->json();
+        $this->line('  /api/projects  '.count($rows).' project (ignoreDates DITERIMA)');
+
+        foreach (array_slice($rows, 0, 5) as $row) {
+            if (is_array($row)) {
+                $this->line(sprintf('      %-5s %s', $row['id'] ?? '?', $row['name'] ?? '?'));
+            }
+        }
+
+        $first = null;
+
+        foreach ($rows as $row) {
+            if (is_array($row) && isset($row['id'])) {
+                $first = (int) $row['id'];
+                break;
+            }
+        }
+
+        if ($first === null) {
+            return;
+        }
+
+        $perProject = $this->fetch($base, $token, '/api/activities', ['project' => $first, 'visible' => 1]);
+        $globals = $this->fetch($base, $token, '/api/activities', ['globals' => 1, 'visible' => 1]);
+
+        if ($perProject === null || $globals === null) {
+            $this->warn('  /api/activities tidak terjangkau');
+
+            return;
+        }
+
+        $perCount = count((array) $perProject->json());
+        $globalCount = count((array) $globals->json());
+
+        // Kalau daftar per-project SUDAH memuat yang global, id-nya beririsan.
+        $perIds = $this->ids($perProject);
+        $globalIds = $this->ids($globals);
+        $irisan = count(array_intersect($perIds, $globalIds));
+
+        $this->line("  /api/activities {$perCount} untuk project {$first}, {$globalCount} global"
+            .($irisan > 0 ? " ({$irisan} beririsan — filter project sudah memuat global)" : ' (tidak beririsan — global WAJIB diambil terpisah)'));
+    }
+
+    /** @return array<int, int> */
+    private function ids(Response $response): array
+    {
+        $out = [];
+
+        foreach ((array) $response->json() as $row) {
+            if (is_array($row) && isset($row['id'])) {
+                $out[] = (int) $row['id'];
+            }
+        }
+
+        return $out;
     }
 
     /** @param array<string, mixed> $query */

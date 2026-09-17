@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Filament;
 
+use App\Domain\Timesheet\TimesheetWorkbookParser;
+use App\Domain\Timesheet\WorkbookReader;
 use App\Enums\UploadStatus;
 use App\Filament\Pages\UploadTimesheet;
 use App\Jobs\PostTimesheetUpload;
@@ -230,5 +232,76 @@ class UploadTimesheetPageTest extends TestCase
             ->assertSet('uploadId', null);
 
         $this->assertSame(UploadStatus::Cancelled, TimesheetUpload::query()->firstOrFail()->status);
+    }
+
+    #[Test]
+    public function project_dipilih_lewat_nama_bukan_angka(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $opsi = Livewire::test(UploadTimesheet::class)->instance()->opsiProject();
+
+        $this->assertSame('C5385 - MyTelkomsel (Telkomsel)', $opsi[105] ?? null);
+        $this->assertArrayHasKey(118, $opsi);
+    }
+
+    #[Test]
+    public function halaman_tetap_terbuka_saat_daftar_project_gagal_dimuat(): void
+    {
+        // Pratinjau dan pengiriman masih berguna dengan id yang diketik manual;
+        // halaman tidak boleh mati hanya karena daftarnya gagal.
+        $this->kimaiGetStatus = 503;
+        $this->actingAs($this->kimaiUser());
+
+        $this->get(UploadTimesheet::getUrl())->assertOk();
+
+        $page = Livewire::test(UploadTimesheet::class)->instance();
+
+        $this->assertFalse($page->katalogTersedia());
+        $this->assertNotNull($page->katalogError);
+    }
+
+    #[Test]
+    public function project_dari_workbook_jadi_pilihan_awal(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse')
+            ->assertSet('data.project_id', 105);
+    }
+
+    #[Test]
+    public function template_yang_diunduh_bisa_dibaca_balik_oleh_parser(): void
+    {
+        // Template yang tidak bisa dibaca aplikasinya sendiri lebih buruk daripada
+        // tidak ada template.
+        $this->actingAs($this->kimaiUser());
+
+        // Dipanggil langsung di instance-nya: lewat Livewire, unduhan dibungkus
+        // effect dan byte-nya tidak bisa diambil balik.
+        $response = Livewire::test(UploadTimesheet::class)->instance()->downloadTemplate();
+
+        ob_start();
+        $response->sendContent();
+        $bytes = (string) ob_get_clean();
+
+        $path = tempnam(sys_get_temp_dir(), 'tpl_').'.xlsx';
+        $this->temps[] = $path;
+        file_put_contents($path, $bytes);
+
+        $reader = new WorkbookReader;
+
+        $this->assertSame(['Daily', 'Overtime'], $reader->sheetNames($path));
+
+        $book = (new TimesheetWorkbookParser)->parse(
+            $reader->read($path, ['Daily', 'Overtime']),
+            $reader->sheetNames($path),
+        );
+
+        $this->assertSame([], $book->issues);
+        $this->assertCount(2, $book->entries, 'Satu sel contoh per sheet.');
+        $this->assertSame('12_PROJECT_MEETING', $book->entries[0]->activityName);
     }
 }

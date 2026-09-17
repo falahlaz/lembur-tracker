@@ -2,6 +2,7 @@
 
 namespace App\Domain\Timesheet;
 
+use App\Domain\Kimai\Exceptions\KimaiException;
 use App\Domain\Timesheet\Exceptions\InvalidWorkbook;
 use App\Enums\UploadEntryStatus;
 use App\Enums\UploadStatus;
@@ -27,6 +28,8 @@ class UploadDrafter
         private readonly WorkbookReader $reader,
         private readonly TimesheetWorkbookParser $parser,
         private readonly DuplicateDetector $duplicates,
+        private readonly KimaiCatalog $catalog,
+        private readonly ActivityResolver $activities,
     ) {}
 
     /** @throws InvalidWorkbook */
@@ -56,9 +59,15 @@ class UploadDrafter
             );
         }
 
+        $projectId = $book->projectId ?? (int) config('kimai.default_project');
+
+        // Diresolusi SEBELUM pemeriksaan duplikat: entri yang activity-nya tidak
+        // ketemu sudah tidak layak kirim, jadi tidak perlu ikut dibandingkan.
+        $issuesActivity = $this->resolveActivities($user, $book->entries, $projectId);
+
         $check = $this->duplicates->mark($user, $book);
 
-        return DB::transaction(function () use ($user, $book, $check, $originalName, $path) {
+        return DB::transaction(function () use ($user, $book, $check, $originalName, $path, $projectId, $issuesActivity) {
             // Satu draf per orang. Draf lama yang ditinggalkan dibatalkan, bukan
             // dihapus — supaya riwayatnya tetap jujur.
             TimesheetUpload::query()
@@ -66,7 +75,7 @@ class UploadDrafter
                 ->draft()
                 ->update(['status' => UploadStatus::Cancelled->value]);
 
-            $issues = $book->issues;
+            $issues = array_merge($book->issues, $issuesActivity);
 
             if (! $check->checked) {
                 $issues[] = 'Duplikat tidak bisa diperiksa: '.$check->unavailableReason;
@@ -77,7 +86,7 @@ class UploadDrafter
                 'original_filename' => $originalName,
                 'file_hash' => @hash_file('sha256', $path) ?: null,
                 'customer_id' => $book->customerId,
-                'project_id' => $book->projectId ?? (int) config('kimai.default_project'),
+                'project_id' => $projectId,
                 'status' => UploadStatus::Draft->value,
                 'range_start' => $book->rangeStart()?->toDateString(),
                 'range_end' => $book->rangeEnd()?->toDateString(),
@@ -102,6 +111,7 @@ class UploadDrafter
                     'end_at' => $entry->endAt->utc(),
                     'duration_minutes' => $entry->durationMinutes(),
                     'activity_id' => $entry->activityId,
+                    'activity_name' => $entry->activityName,
                     'description' => $entry->description,
                     'tag' => $entry->tag,
                     'status' => $entry->isPostable()
@@ -120,6 +130,123 @@ class UploadDrafter
             // default database dan belum pernah dimuat.
             return $upload->refresh();
         });
+    }
+
+    /**
+     * @param  array<int, ParsedEntry>  $entries
+     * @return array<int, string>
+     */
+    private function resolveActivities(User $user, array $entries, int $projectId): array
+    {
+        $pakaiNama = array_filter($entries, fn (ParsedEntry $e) => $e->activityName !== null);
+
+        if ($pakaiNama === []) {
+            return [];
+        }
+
+        try {
+            $daftar = $this->catalog->activities($user, $projectId);
+        } catch (KimaiException $e) {
+            // Jujur, bukan diam-diam lolos: tanpa daftar activity, tidak ada satu
+            // pun nama yang bisa dipastikan benar.
+            foreach ($pakaiNama as $entry) {
+                $entry->skip('Daftar activity tidak bisa diambil dari Kimai.');
+            }
+
+            return ['Daftar activity tidak bisa diambil dari Kimai: '.$e->userMessage()];
+        }
+
+        $gagal = $this->activities->resolve($entries, $daftar, $this->projectLabel($user, $projectId));
+
+        return $gagal > 0
+            ? ["{$gagal} entri memakai nama activity yang tidak dikenali di project ini."]
+            : [];
+    }
+
+    private function projectLabel(User $user, int $projectId): string
+    {
+        try {
+            foreach ($this->catalog->projects($user) as $project) {
+                if ($project['id'] === $projectId) {
+                    return $project['name'];
+                }
+            }
+        } catch (KimaiException) {
+            // Label hanya untuk pesan kesalahan; id tetap memberi tahu yang perlu.
+        }
+
+        return "#{$projectId}";
+    }
+
+    /**
+     * Ganti project sesudah pratinjau dibuat: nama activity yang sama bisa
+     * menunjuk id yang berbeda di project lain.
+     *
+     * Bekerja dari baris yang sudah ada di database, jadi berkasnya TIDAK perlu
+     * diunggah ulang — nama aslinya masih tersimpan di kolom activity_name.
+     *
+     * @return array{diresolusi: int, gagal: int}
+     */
+    public function reresolveActivities(TimesheetUpload $upload, int $projectId): array
+    {
+        $user = $upload->user;
+
+        $rows = $upload->entries()->whereNotNull('activity_name')->get();
+
+        if ($rows->isEmpty()) {
+            $upload->forceFill(['project_id' => $projectId])->save();
+
+            return ['diresolusi' => 0, 'gagal' => 0];
+        }
+
+        // Sengaja TIDAK ditangkap: pemanggil yang memutuskan apa yang ditampilkan
+        // kalau Kimai sedang tidak terjangkau saat user mengganti project.
+        $daftar = $this->catalog->activities($user, $projectId);
+
+        $label = $this->projectLabel($user, $projectId);
+
+        // Diperankan sebagai ParsedEntry supaya aturan pencocokannya persis sama
+        // dengan jalur analisa — bukan salinan kedua yang bisa berbeda perlahan.
+        $proxies = [];
+
+        foreach ($rows as $row) {
+            $proxies[$row->id] = new ParsedEntry(
+                sheet: (string) $row->sheet,
+                cellRef: (string) $row->cell_ref,
+                slotLabel: (string) $row->slot_label,
+                workDate: $row->work_date,
+                beginAt: $row->begin_at,
+                endAt: $row->end_at,
+                activityId: null,
+                activityName: (string) $row->activity_name,
+                description: (string) $row->description,
+                tag: $row->tag,
+            );
+        }
+
+        $gagal = $this->activities->resolve(array_values($proxies), $daftar, $label);
+
+        DB::transaction(function () use ($rows, $proxies, $upload, $projectId) {
+            foreach ($rows as $row) {
+                $proxy = $proxies[$row->id];
+
+                $row->forceFill([
+                    'activity_id' => $proxy->activityId,
+                    'status' => $proxy->activityId !== null
+                        ? UploadEntryStatus::Pending->value
+                        : UploadEntryStatus::Skipped->value,
+                    'skip_reason' => $proxy->skipReason,
+                ])->save();
+            }
+
+            $upload->forceFill([
+                'project_id' => $projectId,
+                'count_skipped' => $upload->entries()
+                    ->where('status', UploadEntryStatus::Skipped->value)->count(),
+            ])->save();
+        });
+
+        return ['diresolusi' => $rows->count() - $gagal, 'gagal' => $gagal];
     }
 
     /**
