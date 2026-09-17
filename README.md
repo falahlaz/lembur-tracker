@@ -163,6 +163,17 @@ tanpa merender satu pun halaman.
 | `ReminderDispatcher` | F-07 — reminder, anti-kirim-ganda |
 | `HistoricalImporter` | OQ-4 — impor lembur historis |
 
+Upload timesheet ke Kimai hidup di `app/Domain/Timesheet/`:
+
+| Berkas | Aturan |
+|---|---|
+| `SlotLabel` | UP-01 — label jam kolom A jadi jam sungguhan, termasuk angka 12 yang terbalik |
+| `WorkbookReader` | UP-02 — satu-satunya yang menyentuh berkas; .xlsx jadi grid biasa |
+| `TimesheetWorkbookParser` | UP-03 — grid jadi calon entri, beserta bentrok di dalam berkas |
+| `DuplicateDetector` | UP-04 — slot yang sudah terisi di Kimai atau sudah pernah diupload |
+| `UploadDrafter` | UP-05 — pratinjau yang disimpan, bukan ditahan di memori |
+| `UploadPoster` | UP-06 — kirim per entri, beserta kebijakan kegagalannya |
+
 Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 
 | Berkas | Aturan |
@@ -208,14 +219,22 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 php artisan test
 ```
 
-204 test, 816 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
+299 test, 1104 assertion. Setiap aturan bisnis punya test bernama sesuai ID-nya:
 
 ```bash
-php artisan test --filter=br_13     # clamping akhir bulan
-php artisan test --filter=br_22     # urutan validasi klaim
-php artisan test --filter=sy_        # aturan sinkronisasi Kimai
-php artisan test --filter=t_2        # skenario uji wajib PRD Sync Kimai §11
+php artisan test --filter=br_13         # clamping akhir bulan
+php artisan test --filter=br_22         # urutan validasi klaim
+php artisan test --filter=sy_            # aturan sinkronisasi Kimai
+php artisan test --filter=t_2            # skenario uji wajib PRD Sync Kimai §11
+php artisan test --filter=SlotLabel     # pembacaan label jam workbook
+php artisan test --filter=Timesheet     # parsing dan upload timesheet
 ```
+
+Test format workbook memakai seam array-in seperti `HistoricalImporter`, jadi hampir
+semuanya jalan tanpa satu pun .xlsx. Yang memang perlu berkas sungguhan
+(`WorkbookReaderTest`) **membangun** workbook-nya sendiri dengan PhpSpreadsheet alih-alih
+memuat fixture biner — rich text ber-newline dan serial tanggal justru yang perlu
+dibuktikan, dan blob yang di-commit tidak bisa direview siapa pun.
 
 Test yang menyentuh saldo **wajib** memanggil `freezeDate()` lebih dulu. Seluruh
 sistem digerakkan tanggal; tanpa membekukan waktu, test yang hari ini hijau akan
@@ -307,11 +326,63 @@ sudah dipakai klaim tidak akan disentuh — ketiganya dilaporkan beserta alasann
 
 ---
 
+## Upload timesheet ke Kimai
+
+Jam kerja diisi di workbook **`Timesheet <bulan>.xlsx`** (sheet `Daily` + `Overtime`),
+lalu harus masuk ke Kimai satu per satu. **Pencatatan → Upload Timesheet** mengerjakannya:
+unggah berkasnya, periksa pratinjaunya, lalu kirim di latar belakang. Entri masuk sebagai
+pemilik API key yang dipakai, jadi ini pekerjaan masing-masing orang — bukan admin.
+
+Entri sheet `Overtime` dikirim bertag `Overtime`, sehingga sync menariknya kembali jadi
+catatan lembur dengan sendirinya. Entri `Daily` tidak bertag dan berhenti di Kimai. Tidak
+ada jalur kedua yang menulis catatan lembur: Kimai tetap satu-satunya sumber kebenaran.
+
+### Jam dibaca dari label, bukan dari nomor baris
+
+Sheet `Daily` punya 5 baris slot, sheet `Overtime` punya 12, dan keduanya pernah bergeser.
+Karena itu yang dibaca adalah **label di kolom A**, bukan posisi barisnya.
+
+Template membalik konvensi jam 12 — `12 AM` berarti tengah hari dan `12 PM` berarti tengah
+malam:
+
+| Label | Dibaca jadi |
+|---|---|
+| `10 AM - 12 AM` | 10:00–12:00 (siang) |
+| `10 PM - 12 PM` | 22:00–24:00 (tengah malam hari berikutnya) |
+
+Rentang yang benar-benar melewati tengah malam (`11 PM - 1 AM`) **ditolak**, bukan ditebak.
+Label yang tidak dikenali juga dilaporkan di pratinjau — supaya template yang berubah
+ketahuan, bukan menghilangkan sebaris entri tanpa suara.
+
+### Tiga hal yang mudah mengagetkan
+
+- **Mengirim ulang berkas yang sama tidak menghasilkan duplikat.** Sebelum mengirim, rentang
+  tanggalnya ditarik dari Kimai **tanpa filter tag** — entri `Daily` yang tidak bertag tetap
+  menempati jamnya — dan slot yang sudah terisi ditandai dilewati. Lapis keduanya murni
+  database, jadi tetap bekerja saat Kimai tidak terjangkau. Kimai sendiri tidak punya
+  idempotency key; tanpa dua lapis ini, satu klik berlebih berarti menghapus puluhan entri
+  satu per satu.
+- **Upload yang berhenti di tengah aman dilanjutkan.** Status disimpan per entri, dan yang
+  sudah terkirim secara struktural tidak bisa terambil lagi. Karena itu job-nya sengaja
+  `tries = 1`: retry otomatis atas POST yang tidak idempoten justru pabrik duplikat.
+- **Satu entri ditolak tidak menjatuhkan sisanya.** 400 dari Kimai menandai entri itu gagal
+  beserta alasan aslinya lalu lanjut; hanya token ditolak (401) dan instance mati (5xx) yang
+  menghentikan seluruh upload.
+
+Sheet Daily satu periode penuh mestinya sekitar 8 jam × hari kerja — angka per sheet di
+pratinjau ada supaya itu bisa dicek sekilas sebelum mengirim.
+
+---
+
 ## Yang belum dikerjakan
 
 - **Fase 2** — peran Atasan/PM (kolom `manager_id` dan sistem role sudah disiapkan,
   jadi tidak perlu migrasi struktural), approval di dalam sistem, dashboard tim.
-- **Fase 3** — import CSV KIMAI dan sinkronisasi status ESS. Integrasi API KIMAI
-  sudah jalan untuk sync manual; sync otomatis harian (F-14/SY-21) belum.
+- **Fase 3** — sinkronisasi status ESS. Integrasi API KIMAI sudah jalan dua arah: sync
+  manual menarik, Upload Timesheet mendorong. Sync otomatis harian (F-14/SY-21) belum.
+- **Rentang sync setelah upload periode lama.** `SyncRangeResolver` membatasi jendela sync
+  pada periode payroll berjalan, jadi mengunggah workbook bulan lalu memasukkan entrinya ke
+  Kimai tetapi TIDAK otomatis menjadikannya catatan lembur di sini. Untuk periode berjalan
+  — kasus normalnya — tidak ada masalah.
 - **OQ-1** — tabel hari libur nasional. Sengaja dilewati: BR-08 membuat hari libur
   dan hari kerja diperlakukan sama, jadi dampaknya kosmetik saja.

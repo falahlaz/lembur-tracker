@@ -5,6 +5,7 @@ namespace App\Domain\Lembur;
 use App\Enums\OvertimeStatus;
 use App\Models\OvertimeRecord;
 use App\Models\User;
+use App\Support\ExcelValue;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Date;
@@ -196,45 +197,13 @@ class HistoricalImporter
         return $data;
     }
 
+    /**
+     * Seluruh penanganannya — serial Excel, "15/01/2026", fallback Carbon —
+     * hidup di ExcelValue supaya importer timesheet memakai yang sama persis.
+     */
     private function normaliseDate(mixed $value): ?string
     {
-        if (blank($value)) {
-            return null;
-        }
-
-        // Excel menyimpan tanggal sebagai serial number (hari sejak 1900).
-        if (is_numeric($value) && (float) $value >= 1) {
-            try {
-                return Date::parse(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject((float) $value))
-                    ->toDateString();
-            } catch (Throwable) {
-                return null;
-            }
-        }
-
-        $text = trim((string) $value);
-
-        // Orang Indonesia menulis 15/01/2026, sementara Carbon membaca garis miring
-        // sebagai format Amerika (bulan/hari) dan diam-diam menolaknya. Format
-        // hari-dulu dicoba eksplisit, dengan verifikasi roundtrip supaya tidak ada
-        // tanggal yang "berhasil" dibaca menjadi sesuatu yang lain.
-        foreach (['d/m/Y', 'd-m-Y', 'd.m.Y', 'j/n/Y', 'j-n-Y'] as $format) {
-            try {
-                $parsed = \Carbon\CarbonImmutable::createFromFormat($format.'|', $text);
-            } catch (Throwable) {
-                continue;
-            }
-
-            if ($parsed !== false && $parsed->format($format) === $text) {
-                return $parsed->toDateString();
-            }
-        }
-
-        try {
-            return Date::parse($text)->toDateString();
-        } catch (Throwable) {
-            return null;
-        }
+        return ExcelValue::toDate($value)?->toDateString();
     }
 
     private function normaliseTime(mixed $value): ?string
