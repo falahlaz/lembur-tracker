@@ -8,12 +8,15 @@ use App\Enums\ClaimStatus;
 use App\Enums\ClaimType;
 use App\Enums\OvertimeStatus;
 use App\Enums\Role;
+use App\Models\KimaiActivity;
+use App\Models\KimaiProject;
 use App\Models\LeaveClaim;
 use App\Models\OvertimeRecord;
 use App\Models\OvertimeRule;
 use App\Models\User;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -103,6 +106,15 @@ abstract class TestCase extends BaseTestCase
         return $user->refresh();
     }
 
+    /** Admin yang sudah punya koneksi Kimai — pemakai tombol sync katalog. */
+    protected function kimaiAdmin(string $token = 'tok-admin-cd34'): User
+    {
+        $admin = $this->kimaiUser(token: $token);
+        $admin->update(['role' => Role::Admin]);
+
+        return $admin->refresh();
+    }
+
     /**
      * Satu entri timesheet Kimai berbentuk payload asli instance.
      *
@@ -189,9 +201,9 @@ abstract class TestCase extends BaseTestCase
         $this->kimaiFaked = true;
 
         Http::fake([
-            '*/api/projects*' => fn () => $this->kimaiGetStatus !== null
+            '*/api/projects*' => fn ($request) => $this->kimaiGetStatus !== null
                 ? Http::response('', $this->kimaiGetStatus)
-                : Http::response($this->kimaiProjects, 200),
+                : Http::response($this->kimaiHalaman($request, $this->kimaiProjects), 200),
 
             '*/api/activities*' => function ($request) {
                 if ($this->kimaiGetStatus !== null) {
@@ -205,12 +217,14 @@ abstract class TestCase extends BaseTestCase
                 // kalau tidak, bug penggabungannya tidak akan pernah terlihat.
                 $globals = filled($query['globals'] ?? null);
 
-                return Http::response(array_values(array_filter(
+                $cocok = array_values(array_filter(
                     $this->kimaiActivities,
                     fn (array $a) => $globals
                         ? ($a['project'] ?? null) === null
                         : ($a['project'] ?? null) !== null,
-                )), 200);
+                ));
+
+                return Http::response($this->kimaiHalaman($request, $cocok), 200);
             },
 
             '*/api/timesheets*' => function ($request) {
@@ -235,6 +249,51 @@ abstract class TestCase extends BaseTestCase
                 );
             },
         ]);
+    }
+
+    /**
+     * Memotong satu halaman sesuai `page`/`size` di query.
+     *
+     * Katalog kini diambil berhalaman (KimaiClient::getAllPages), jadi fake yang
+     * selalu mengembalikan seluruh daftar akan menyembunyikan justru bug yang
+     * paling mungkin: halaman kedua yang tidak pernah diambil.
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<int, array<string, mixed>>
+     */
+    protected function kimaiHalaman(Request $request, array $rows): array
+    {
+        parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+        $size = (int) ($query['size'] ?? config('kimai.page_size'));
+        $page = max(1, (int) ($query['page'] ?? 1));
+
+        return array_slice($rows, ($page - 1) * $size, $size);
+    }
+
+    /**
+     * Mengisi cermin katalog lokal dengan fixture yang sama yang dilayani fakeKimai(),
+     * tanpa menyentuh jaringan — dipakai test yang menguji jalur cadangan saat Kimai mati.
+     */
+    protected function seedKimaiCatalog(): void
+    {
+        foreach ($this->kimaiProjects as $project) {
+            KimaiProject::query()->create([
+                'kimai_id' => $project['id'],
+                'name' => $project['name'],
+                'customer' => $project['parentTitle'] ?? null,
+                'synced_at' => now(),
+            ]);
+        }
+
+        foreach ($this->kimaiActivities as $activity) {
+            KimaiActivity::query()->create([
+                'kimai_id' => $activity['id'],
+                'name' => $activity['name'],
+                'project_id' => $activity['project'] ?? null,
+                'synced_at' => now(),
+            ]);
+        }
     }
 
     protected bool $kimaiFaked = false;

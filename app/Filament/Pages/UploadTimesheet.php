@@ -3,15 +3,20 @@
 namespace App\Filament\Pages;
 
 use App\Domain\Kimai\Exceptions\KimaiException;
+use App\Domain\Kimai\KimaiCatalogMirror;
+use App\Domain\Timesheet\CatalogResult;
 use App\Domain\Timesheet\Exceptions\InvalidWorkbook;
 use App\Domain\Timesheet\KimaiCatalog;
+use App\Domain\Timesheet\SlotLabel;
 use App\Domain\Timesheet\UploadDrafter;
 use App\Enums\UploadEntryStatus;
 use App\Enums\UploadStatus;
 use App\Jobs\PostTimesheetUpload;
 use App\Models\TimesheetUpload;
 use App\Models\TimesheetUploadEntry;
+use App\Support\Format;
 use BackedEnum;
+use Carbon\CarbonImmutable;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
@@ -116,7 +121,10 @@ class UploadTimesheet extends Page implements HasSchemas
                     // berarti nama yang sama bisa menunjuk id yang berbeda.
                     ->afterStateUpdated(fn () => $this->resolveUlangActivity())
                     ->visible(fn (): bool => $this->katalogTersedia())
-                    ->helperText('Terpilih dari baris "Project ID" di workbook setelah diperiksa.'),
+                    ->helperText(fn (): string => 'Terpilih dari baris "Project ID" di workbook setelah diperiksa.'
+                        .($this->katalogDariLokal()
+                            ? ' Daftar ini dari data lokal, bukan langsung dari Kimai.'
+                            : '')),
 
                 // Jalur mundur: halaman tidak boleh mati hanya karena daftar project
                 // gagal dimuat. Pratinjau dan pengiriman tetap berguna dengan id
@@ -132,48 +140,90 @@ class UploadTimesheet extends Page implements HasSchemas
             ->statePath('data');
     }
 
-    /** Pesan kenapa daftar project tidak tersedia; null berarti tidak ada masalah. */
+    /**
+     * Kenapa Kimai gagal dihubungi; null berarti daftarnya memang datang dari Kimai.
+     *
+     * Sejak ada cermin lokal, terisinya properti ini TIDAK lagi otomatis berarti
+     * daftarnya kosong — bisa saja cermin yang menyelamatkan. Yang membedakan
+     * keduanya katalogDariLokal(), dan itulah yang dibaca blade untuk memilih antara
+     * peringatan "pakai ID manual" dan keterangan "daftar ini dari data lokal".
+     */
     public ?string $katalogError = null;
 
-    /** @var array<int, string>|null memo per request; options() dipanggil berkali-kali per render */
-    private ?array $opsiProjectMemo = null;
+    /** Memo per request; options() dipanggil berkali-kali per render. */
+    private ?CatalogResult $katalogMemo = null;
 
-    /** @return array<int, string> id => "Nama (Customer)" */
-    public function opsiProject(): array
+    private function katalogProject(): CatalogResult
     {
-        if ($this->opsiProjectMemo !== null) {
-            return $this->opsiProjectMemo;
+        if ($this->katalogMemo !== null) {
+            return $this->katalogMemo;
         }
 
         $user = Auth::user();
 
         if ($user === null) {
-            return [];
+            return $this->katalogMemo = CatalogResult::kosong('Sesi tidak dikenali.');
         }
 
-        try {
-            $projects = app(KimaiCatalog::class)->projects($user);
-            $this->katalogError = null;
-        } catch (KimaiException $e) {
-            $this->katalogError = $e->userMessage();
+        $hasil = app(KimaiCatalog::class)->projectsOrMirror($user);
 
-            return $this->opsiProjectMemo = [];
-        }
+        $this->katalogError = $hasil->error;
 
+        return $this->katalogMemo = $hasil;
+    }
+
+    /** @return array<int, string> id => "Nama (Customer)" */
+    public function opsiProject(): array
+    {
         $opsi = [];
 
-        foreach ($projects as $project) {
+        foreach ($this->katalogProject()->items as $project) {
             $opsi[$project['id']] = $project['customer'] !== null
                 ? "{$project['name']} ({$project['customer']})"
                 : $project['name'];
         }
 
-        return $this->opsiProjectMemo = $opsi;
+        return $opsi;
     }
 
     public function katalogTersedia(): bool
     {
         return $this->opsiProject() !== [];
+    }
+
+    /** Daftarnya terselamatkan cermin lokal, bukan datang dari Kimai. */
+    public function katalogDariLokal(): bool
+    {
+        return $this->katalogProject()->dariCermin();
+    }
+
+    public function terakhirKatalogDisinkronkan(): ?CarbonImmutable
+    {
+        return app(KimaiCatalogMirror::class)->terakhirDisinkronkan();
+    }
+
+    /** "17 Sep 14:20", atau null kalau cerminnya belum pernah diisi. */
+    public function terakhirKatalogDisinkronkanTeks(): ?string
+    {
+        $waktu = $this->terakhirKatalogDisinkronkan();
+
+        return $waktu === null
+            ? null
+            : Format::tanggalRingkas($waktu).' '
+                .$waktu->timezone(config('app.display_timezone'))->format('H:i');
+    }
+
+    /**
+     * Potongan kalimat ", terakhir disinkronkan 17 Sep 14:20" — atau string kosong.
+     *
+     * Dirakit di sini, bukan di blade: menyusunnya di sana menuntut variabel blade,
+     * dan @php(...) sebaris di berkas ini adalah jebakan (lihat catatan di view).
+     */
+    public function keteranganSinkronCermin(): string
+    {
+        $teks = $this->terakhirKatalogDisinkronkanTeks();
+
+        return $teks === null ? '' : ", terakhir disinkronkan {$teks}";
     }
 
     /** Project baru di Kimai tidak perlu menunggu TTL cache. */
@@ -186,7 +236,7 @@ class UploadTimesheet extends Page implements HasSchemas
         }
 
         app(KimaiCatalog::class)->forget($user);
-        $this->opsiProjectMemo = null;
+        $this->katalogMemo = null;
         unset($this->upload, $this->entries, $this->riwayat);
 
         Notification::make()->success()->title('Daftar project dimuat ulang')->send();
@@ -234,14 +284,9 @@ class UploadTimesheet extends Page implements HasSchemas
     public function downloadTemplate(): StreamedResponse
     {
         $book = new Spreadsheet;
-        $slots = [
-            'Daily' => ['9 AM - 10 AM', '10 AM - 12 AM', '1 PM - 3 PM', '3 PM - 5 PM', '5 PM - 6 PM'],
-            'Overtime' => [
-                '12 AM - 2 AM', '2 AM - 4 AM', '4 AM - 5 AM', '5 AM - 6 AM',
-                '9 AM - 10 AM', '10 AM - 12 AM', '1 PM - 3 PM', '3 PM - 5 PM',
-                '5 PM - 6 PM', '6 PM - 8 PM', '8 PM - 10 PM', '10 PM - 12 PM',
-            ],
-        ];
+        // Daftarnya milik SlotLabel, supaya template ini dan halaman Legenda
+        // tidak pernah menampilkan label yang berbeda.
+        $slots = SlotLabel::CONTOH_SLOT;
 
         $pertama = true;
 

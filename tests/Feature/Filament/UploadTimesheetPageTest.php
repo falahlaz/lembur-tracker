@@ -259,6 +259,42 @@ class UploadTimesheetPageTest extends TestCase
 
         $this->assertFalse($page->katalogTersedia());
         $this->assertNotNull($page->katalogError);
+        // Tanpa cermin yang terisi, inilah cabang "dua-duanya kosong".
+        $this->assertFalse($page->katalogDariLokal());
+    }
+
+    #[Test]
+    public function daftar_project_jatuh_ke_data_lokal_saat_kimai_mati(): void
+    {
+        // Kalau admin sudah pernah menyinkronkan katalog, matinya Kimai tidak lagi
+        // memaksa orang kembali mengetik id project dengan tangan.
+        $this->seedKimaiCatalog();
+        $this->kimaiGetStatus = 503;
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)->instance();
+
+        $this->assertTrue($page->katalogTersedia());
+        $this->assertTrue($page->katalogDariLokal());
+        $this->assertNotNull($page->katalogError);
+        $this->assertSame('C5385 - MyTelkomsel (Telkomsel)', $page->opsiProject()[105]);
+        // Waktunya ikut disebut, supaya "agak lama" bisa dinilai sendiri oleh pembacanya.
+        $this->assertNotNull($page->terakhirKatalogDisinkronkanTeks());
+        $this->assertStringContainsString('terakhir disinkronkan', $page->keteranganSinkronCermin());
+    }
+
+    #[Test]
+    public function peringatan_data_lokal_menyebut_kapan_terakhir_disinkronkan(): void
+    {
+        $this->seedKimaiCatalog();
+        $this->kimaiGetStatus = 503;
+        $this->actingAs($this->kimaiUser());
+
+        Livewire::test(UploadTimesheet::class)
+            ->assertSee('Kimai sedang tidak terjangkau')
+            ->assertSee('terakhir disinkronkan')
+            // Bukan peringatan "ketik id manual": Select-nya justru masih jalan.
+            ->assertDontSee('Project diisi dengan ID manual');
     }
 
     #[Test]
