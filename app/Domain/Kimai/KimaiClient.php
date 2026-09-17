@@ -118,6 +118,85 @@ class KimaiClient
         return $this->post($token, '/api/timesheets', $payload);
     }
 
+    /**
+     * Daftar project untuk dipilih user.
+     *
+     * `ignoreDates=1` bukan hiasan: tanpa itu Kimai menyembunyikan project yang
+     * tanggal selesainya sudah lewat, dan itu persis project periode lalu — yang
+     * masih perlu dipilih kalau ada workbook lama yang mau diunggah ulang.
+     * Project Kimai berganti tiap tahun, jadi kasus itu normal, bukan langka.
+     *
+     * @return array<int, array{id: int, name: string, customer: ?string}>
+     */
+    public function projects(string $token): array
+    {
+        $rows = $this->get($token, '/api/projects', [
+            'visible' => 1,
+            'ignoreDates' => 1,
+            'orderBy' => 'name',
+            'order' => 'ASC',
+        ]);
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row) || ! isset($row['id'])) {
+                continue;
+            }
+
+            $out[] = [
+                'id' => (int) $row['id'],
+                'name' => trim((string) ($row['name'] ?? '')),
+                // parentTitle = nama customer. Dipakai membedakan dua project
+                // yang namanya mirip antar customer.
+                'customer' => filled($row['parentTitle'] ?? null) ? trim((string) $row['parentTitle']) : null,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Daftar activity, untuk menerjemahkan nama di sheet menjadi id.
+     *
+     * Activity bisa GLOBAL (`project` null) — berlaku di semua project — atau
+     * terikat satu project. Apakah filter `project=<id>` sudah ikut mengembalikan
+     * yang global berbeda antar versi Kimai, dan dokumentasi instance ini tidak
+     * bisa diakses dari luar (lihat ProbeKimaiApi). Karena itu pemanggil mengambil
+     * keduanya lalu menggabungkan, alih-alih menebak: menebak salah berarti
+     * seluruh activity global tidak pernah ketemu namanya.
+     *
+     * @return array<int, array{id: int, name: string, project: ?int}>
+     */
+    public function activities(string $token, ?int $projectId = null, bool $globalsOnly = false): array
+    {
+        $query = ['visible' => 1, 'orderBy' => 'name', 'order' => 'ASC'];
+
+        if ($globalsOnly) {
+            $query['globals'] = 1;
+        } elseif ($projectId !== null) {
+            $query['project'] = $projectId;
+        }
+
+        $rows = $this->get($token, '/api/activities', $query);
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row) || ! isset($row['id'])) {
+                continue;
+            }
+
+            $out[] = [
+                'id' => (int) $row['id'],
+                'name' => trim((string) ($row['name'] ?? '')),
+                'project' => isset($row['project']) && $row['project'] !== null ? (int) $row['project'] : null,
+            ];
+        }
+
+        return $out;
+    }
+
     /** F-11 — tes koneksi termurah yang tetap membuktikan token dipakai. */
     public function ping(string $token): void
     {

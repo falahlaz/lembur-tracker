@@ -2,12 +2,10 @@
 
 namespace Tests\Feature\Domain;
 
-use App\Domain\Timesheet\DuplicateDetector;
 use App\Domain\Timesheet\Exceptions\InvalidWorkbook;
-use App\Domain\Timesheet\TimesheetWorkbookParser;
+use App\Domain\Timesheet\KimaiCatalog;
 use App\Domain\Timesheet\UploadDrafter;
 use App\Domain\Timesheet\UploadPoster;
-use App\Domain\Timesheet\WorkbookReader;
 use App\Enums\UploadEntryStatus;
 use App\Enums\UploadStatus;
 use App\Jobs\PostTimesheetUpload;
@@ -16,6 +14,7 @@ use App\Models\TimesheetUpload;
 use App\Models\TimesheetUploadEntry;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use PhpOffice\PhpSpreadsheet\RichText\RichText;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -99,13 +98,32 @@ class TimesheetUploadTest extends TestCase
         return $path;
     }
 
+    /** Workbook format baru: sel memakai NAMA activity, bukan id. */
+    private function workbookBernama(string $namaActivity = '31_DEV_FEATURE'): string
+    {
+        $book = new Spreadsheet;
+        $sheet = $book->getActiveSheet();
+        $sheet->setTitle('Daily');
+        $sheet->setCellValue('A1', 'Customer ID')->setCellValue('B1', 112);
+        $sheet->setCellValue('A2', 'Project ID')->setCellValue('B2', 105);
+        $sheet->setCellValue('B4', 46252);
+
+        $rich = new RichText;
+        $rich->createTextRun("Activity: {$namaActivity}")->getFont()->setBold(true);
+        $rich->createText("\n\nSprint 8 - MTA-1867");
+        $sheet->setCellValue('A5', '9 AM - 10 AM')->setCellValue('B5', $rich);
+
+        $path = tempnam(sys_get_temp_dir(), 'named_').'.xlsx';
+        (new XlsxWriter($book))->save($path);
+        $book->disconnectWorksheets();
+        $this->temps[] = $path;
+
+        return $path;
+    }
+
     private function drafter(): UploadDrafter
     {
-        return new UploadDrafter(
-            new WorkbookReader,
-            new TimesheetWorkbookParser,
-            app(DuplicateDetector::class),
-        );
+        return app(UploadDrafter::class);
     }
 
     private function draft(): TimesheetUpload
@@ -443,5 +461,130 @@ class TimesheetUploadTest extends TestCase
             TimesheetUploadEntry::query()->where('user_id', $this->user->id)->count(),
         );
         $this->assertSame($this->user->id, $upload->user_id);
+    }
+
+    #[Test]
+    public function nama_activity_diresolusi_jadi_id_kimai(): void
+    {
+        $upload = $this->drafter()->draft($this->user, $this->workbookBernama(), 'Timesheet.xlsx');
+
+        $entry = $upload->entries()->firstOrFail();
+
+        $this->assertSame('31_DEV_FEATURE', $entry->activity_name);
+        $this->assertSame(8, $entry->activity_id);
+        $this->assertSame(UploadEntryStatus::Pending, $entry->status);
+    }
+
+    #[Test]
+    public function nama_activity_global_ikut_ketemu(): void
+    {
+        // Activity global diambil lewat permintaan terpisah lalu digabung; kalau
+        // penggabungannya salah, seluruh activity global tidak akan pernah ketemu.
+        $upload = $this->drafter()->draft($this->user, $this->workbookBernama('12_PROJECT_MEETING'), 'Timesheet.xlsx');
+
+        $this->assertSame(25, $upload->entries()->firstOrFail()->activity_id);
+    }
+
+    #[Test]
+    public function nama_activity_tak_dikenal_ditandai_dan_tidak_pernah_dikirim(): void
+    {
+        $upload = $this->drafter()->draft($this->user, $this->workbookBernama('31_DEV_FEATUR'), 'Timesheet.xlsx');
+
+        $entry = $upload->entries()->firstOrFail();
+
+        $this->assertSame(UploadEntryStatus::Skipped, $entry->status);
+        $this->assertNull($entry->activity_id);
+        $this->assertStringContainsString('31_DEV_FEATUR', $entry->skip_reason);
+
+        $this->kirim($upload);
+
+        $this->assertSame([], $this->kimaiPostBodies());
+    }
+
+    #[Test]
+    public function daftar_activity_yang_gagal_diambil_dilaporkan_jujur(): void
+    {
+        $this->kimaiGetStatus = 503;
+
+        $upload = $this->drafter()->draft($this->user, $this->workbookBernama(), 'Timesheet.xlsx');
+
+        $entry = $upload->entries()->firstOrFail();
+
+        $this->assertSame(UploadEntryStatus::Skipped, $entry->status);
+        $this->assertStringContainsString('Daftar activity tidak bisa diambil', $entry->skip_reason);
+        $this->assertNotEmpty($upload->issues);
+    }
+
+    #[Test]
+    public function ganti_project_meresolusi_ulang_nama_tanpa_baca_ulang_berkas(): void
+    {
+        $upload = $this->drafter()->draft($this->user, $this->workbookBernama(), 'Timesheet.xlsx');
+        $this->assertSame(8, $upload->entries()->firstOrFail()->activity_id);
+
+        // Di project 118, nama yang sama menunjuk id yang berbeda.
+        $this->kimaiActivities = [
+            ['id' => 77, 'name' => '31_DEV_FEATURE', 'project' => 118],
+        ];
+
+        $hasil = $this->drafter()->reresolveActivities($upload, 118);
+
+        $this->assertSame(['diresolusi' => 1, 'gagal' => 0], $hasil);
+        $this->assertSame(77, $upload->entries()->firstOrFail()->activity_id);
+        $this->assertSame(118, $upload->refresh()->project_id);
+    }
+
+    #[Test]
+    public function ganti_project_ke_yang_tidak_punya_activity_itu_menandai_entrinya(): void
+    {
+        $upload = $this->drafter()->draft($this->user, $this->workbookBernama(), 'Timesheet.xlsx');
+
+        $this->kimaiActivities = [
+            ['id' => 90, 'name' => '99_LAIN_LAIN', 'project' => 118],
+        ];
+
+        $hasil = $this->drafter()->reresolveActivities($upload, 118);
+
+        $this->assertSame(1, $hasil['gagal']);
+
+        $entry = $upload->entries()->firstOrFail();
+        $this->assertSame(UploadEntryStatus::Skipped, $entry->status);
+        $this->assertNull($entry->activity_id);
+        $this->assertSame(1, $upload->refresh()->count_skipped);
+    }
+
+    #[Test]
+    public function entri_format_lama_tidak_ikut_diresolusi_ulang(): void
+    {
+        // Sel `Activity ID: N` membawa id-nya sendiri dan tidak punya nama untuk
+        // dicocokkan; mengganti project tidak boleh menghapusnya.
+        $upload = $this->draft();
+
+        $hasil = $this->drafter()->reresolveActivities($upload, 118);
+
+        $this->assertSame(['diresolusi' => 0, 'gagal' => 0], $hasil);
+        $this->assertSame(3, $upload->entries()->where('status', UploadEntryStatus::Pending->value)->count());
+        $this->assertSame(118, $upload->refresh()->project_id);
+    }
+
+    #[Test]
+    public function daftar_project_diminta_dengan_ignore_dates(): void
+    {
+        // Tanpa ignoreDates, project yang tanggal selesainya sudah lewat hilang
+        // dari daftar — dan itu persis project periode lalu.
+        app(KimaiCatalog::class)->projects($this->user);
+
+        Http::assertSent(function ($request) {
+            return str_contains($request->url(), '/api/projects')
+                && str_contains($request->url(), 'ignoreDates=1');
+        });
+    }
+
+    #[Test]
+    public function daftar_activity_diminta_dua_kali_project_dan_global(): void
+    {
+        app(KimaiCatalog::class)->activities($this->user, 105);
+
+        Http::assertSent(fn ($r) => str_contains($r->url(), 'project=105'));
+        Http::assertSent(fn ($r) => str_contains($r->url(), 'globals=1'));
     }
 }

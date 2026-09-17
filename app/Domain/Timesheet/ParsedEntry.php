@@ -24,7 +24,10 @@ final class ParsedEntry
         public readonly CarbonImmutable $workDate,
         public readonly CarbonImmutable $beginAt,
         public readonly CarbonImmutable $endAt,
-        public readonly ?int $activityId,
+        /** Terisi kalau sel memakai format lama `Activity ID: N`, atau setelah nama diresolusi. */
+        public ?int $activityId,
+        /** Terisi kalau sel memakai `Activity: <nama>`; diresolusi jadi id oleh ActivityResolver. */
+        public readonly ?string $activityName,
         public readonly string $description,
         /** 'Overtime' atau NULL — tidak pernah string kosong, lihat toKimaiPayload(). */
         public readonly ?string $tag,
@@ -42,7 +45,9 @@ final class ParsedEntry
 
     public function isPostable(): bool
     {
-        return $this->isValid() && $this->skipReason === null;
+        // activityId null berarti namanya belum (atau tidak bisa) diresolusi;
+        // entri seperti itu tidak boleh pernah sampai ke toKimaiPayload().
+        return $this->isValid() && $this->skipReason === null && $this->activityId !== null;
     }
 
     public function durationMinutes(): int

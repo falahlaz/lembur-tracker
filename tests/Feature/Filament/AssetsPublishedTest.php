@@ -2,6 +2,9 @@
 
 namespace Tests\Feature\Filament;
 
+use App\Enums\Role;
+use App\Filament\Pages\ImportLembur;
+use App\Filament\Pages\UploadTimesheet;
 use App\Filament\Resources\LeaveClaims\LeaveClaimResource;
 use App\Filament\Resources\OvertimeRecords\OvertimeRecordResource;
 use Filament\Support\Facades\FilamentAsset;
@@ -66,5 +69,38 @@ class AssetsPublishedTest extends TestCase
                 ->assertSee('js/filament/forms/components/date-time-picker.js', escape: false)
                 ->assertSee('js/filament/forms/components/select.js', escape: false);
         }
+    }
+
+    /**
+     * FileUpload selalu merender `<input type="file">` di server — FilePond
+     * memakainya sebagai sumber, bukan sebagai fallback. Kalau modul
+     * file-upload.js tidak pernah diminta, input itu tampil apa adanya
+     * ("Choose File / No file chosen") sementara sisa panel terlihat normal.
+     *
+     * Dua halaman ber-FileUpload diuji TERPISAH: berganti user di dalam satu
+     * request test memicu AuthenticateSession membatalkan sesinya.
+     */
+    #[Test]
+    public function halaman_upload_timesheet_merender_src_komponen_file_upload(): void
+    {
+        // Halaman menarik daftar project dari Kimai saat mount.
+        $this->fakeKimai([]);
+        $this->actingAs($this->kimaiUser());
+
+        $this->get(UploadTimesheet::getUrl())
+            ->assertOk()
+            ->assertSee('js/filament/forms/components/file-upload.js', escape: false);
+    }
+
+    #[Test]
+    public function halaman_import_historis_merender_src_komponen_file_upload(): void
+    {
+        $admin = $this->employee();
+        $admin->update(['role' => Role::Admin]);
+        $this->actingAs($admin->refresh());
+
+        $this->get(ImportLembur::getUrl())
+            ->assertOk()
+            ->assertSee('js/filament/forms/components/file-upload.js', escape: false);
     }
 }

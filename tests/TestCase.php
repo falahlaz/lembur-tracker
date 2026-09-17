@@ -188,30 +188,80 @@ abstract class TestCase extends BaseTestCase
 
         $this->kimaiFaked = true;
 
-        Http::fake(['*/api/timesheets*' => function ($request) {
-            // Upload menulis lewat endpoint yang sama dengan sync membacanya, jadi
-            // cabang ini harus didahulukan — kalau tidak, setiap POST akan dijawab
-            // dengan daftar entri dan terlihat "berhasil".
-            if ($request->method() === 'POST') {
-                return $this->respondToKimaiPost($request->data());
-            }
+        Http::fake([
+            '*/api/projects*' => fn () => $this->kimaiGetStatus !== null
+                ? Http::response('', $this->kimaiGetStatus)
+                : Http::response($this->kimaiProjects, 200),
 
-            if ($this->kimaiGetStatus !== null) {
-                return Http::response('', $this->kimaiGetStatus);
-            }
+            '*/api/activities*' => function ($request) {
+                if ($this->kimaiGetStatus !== null) {
+                    return Http::response('', $this->kimaiGetStatus);
+                }
 
-            $size = (int) config('kimai.page_size');
-            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
-            $page = max(1, (int) ($query['page'] ?? 1));
+                parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
 
-            return Http::response(
-                array_slice($this->kimaiEntries, ($page - 1) * $size, $size),
-                200,
-            );
-        }]);
+                // Activity global diambil lewat permintaan terpisah dan digabung
+                // pemanggil, jadi fake-nya harus benar-benar membedakan keduanya —
+                // kalau tidak, bug penggabungannya tidak akan pernah terlihat.
+                $globals = filled($query['globals'] ?? null);
+
+                return Http::response(array_values(array_filter(
+                    $this->kimaiActivities,
+                    fn (array $a) => $globals
+                        ? ($a['project'] ?? null) === null
+                        : ($a['project'] ?? null) !== null,
+                )), 200);
+            },
+
+            '*/api/timesheets*' => function ($request) {
+                // Upload menulis lewat endpoint yang sama dengan sync membacanya, jadi
+                // cabang ini harus didahulukan — kalau tidak, setiap POST akan dijawab
+                // dengan daftar entri dan terlihat "berhasil".
+                if ($request->method() === 'POST') {
+                    return $this->respondToKimaiPost($request->data());
+                }
+
+                if ($this->kimaiGetStatus !== null) {
+                    return Http::response('', $this->kimaiGetStatus);
+                }
+
+                $size = (int) config('kimai.page_size');
+                parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+                $page = max(1, (int) ($query['page'] ?? 1));
+
+                return Http::response(
+                    array_slice($this->kimaiEntries, ($page - 1) * $size, $size),
+                    200,
+                );
+            },
+        ]);
     }
 
     protected bool $kimaiFaked = false;
+
+    /**
+     * Daftar project yang dilayani fake. Bentuknya mengikuti respons asli Kimai:
+     * `parentTitle` adalah nama CUSTOMER, bukan nama project.
+     *
+     * @var array<int, array<string, mixed>>
+     */
+    protected array $kimaiProjects = [
+        ['id' => 105, 'name' => 'C5385 - MyTelkomsel', 'parentTitle' => 'Telkomsel'],
+        ['id' => 118, 'name' => 'C6001 - MyTelkomsel 2027', 'parentTitle' => 'Telkomsel'],
+    ];
+
+    /**
+     * Activity yang dilayani fake. `project` null berarti GLOBAL — berlaku di
+     * semua project, dan diambil lewat permintaan terpisah.
+     *
+     * @var array<int, array<string, mixed>>
+     */
+    protected array $kimaiActivities = [
+        ['id' => 25, 'name' => '12_PROJECT_MEETING', 'project' => null],
+        ['id' => 8, 'name' => '31_DEV_FEATURE', 'project' => 105],
+        ['id' => 9, 'name' => '51_DEPLOY_SOFTWARE', 'project' => 105],
+        ['id' => 16, 'name' => '33_DEV_BUGFIX', 'project' => 105],
+    ];
 
     /**
      * Membuat setiap GET gagal dengan status ini. Lewat properti, bukan Http::fake()

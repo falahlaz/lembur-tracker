@@ -24,7 +24,20 @@ class TimesheetWorkbookParser
     /** Sheet yang dibaca → apakah entrinya diberi tag. */
     public const SHEETS = ['Daily' => false, 'Overtime' => true];
 
-    private const ACTIVITY_MARKER = '/Activity\s*ID\s*:\s*(\d+)/i';
+    /**
+     * Dua bentuk penanda yang diterima.
+     *
+     * Format baru memakai NAMA activity; format lama yang berangka tetap diterima
+     * supaya workbook periode sebelumnya masih bisa diunggah ulang.
+     *
+     * Keduanya saling lepas — pola nama menuntut `:` langsung setelah "Activity",
+     * sehingga "Activity ID: 8" tidak pernah terbaca sebagai nama "ID: 8". Yang
+     * berangka tetap diperiksa lebih dulu sebagai urutan prioritas, untuk sel yang
+     * entah bagaimana memuat keduanya.
+     */
+    private const ACTIVITY_ID_MARKER = '/Activity\s*ID\s*:\s*(\d+)/i';
+
+    private const ACTIVITY_NAME_MARKER = '/Activity\s*:[ \t]*([^\r\n]+)/i';
 
     private const CUSTOMER_LABEL = '/^customer\s*id$/i';
 
@@ -181,10 +194,12 @@ class TimesheetWorkbookParser
                     continue;
                 }
 
-                if (preg_match(self::ACTIVITY_MARKER, $text, $m) !== 1) {
+                [$activityId, $activityName] = $this->readActivity($text);
+
+                if ($activityId === null && $activityName === null) {
                     // Sel berisi teks tetapi tanpa penanda activity: bukan entri,
                     // tetapi juga bukan sel kosong. Tidak diimpor, tetap dilaporkan.
-                    $issues[] = "Sheet '{$sheet}'!{$column}{$rowNumber}: ada isi tetapi tanpa 'Activity ID', dilewati.";
+                    $issues[] = "Sheet '{$sheet}'!{$column}{$rowNumber}: ada isi tetapi tanpa penanda 'Activity', dilewati.";
 
                     continue;
                 }
@@ -196,7 +211,8 @@ class TimesheetWorkbookParser
                     workDate: $date,
                     beginAt: $slot->beginAt($date),
                     endAt: $slot->endAt($date),
-                    activityId: (int) $m[1],
+                    activityId: $activityId,
+                    activityName: $activityName,
                     description: $this->cleanDescription($text),
                     tag: $tag,
                 );
@@ -256,13 +272,42 @@ class TimesheetWorkbookParser
     }
 
     /**
+     * Membaca penanda activity. Format berangka diperiksa lebih dulu supaya
+     * `Activity ID: 8` tidak tertangkap sebagai nama "ID: 8".
+     *
+     * @return array{0: ?int, 1: ?string}
+     */
+    private function readActivity(string $text): array
+    {
+        if (preg_match(self::ACTIVITY_ID_MARKER, $text, $m) === 1) {
+            return [(int) $m[1], null];
+        }
+
+        if (preg_match(self::ACTIVITY_NAME_MARKER, $text, $m) === 1) {
+            $name = trim($m[1]);
+
+            if ($name !== '') {
+                return [null, $name];
+            }
+        }
+
+        return [null, null];
+    }
+
+    /**
      * Membuang penanda activity SEKALI, lalu merapikan ujungnya. Newline di dalam
      * badan deskripsi dipertahankan — itu daftar langkah kerja yang ikut masuk ke
      * Kimai apa adanya.
      */
     private function cleanDescription(string $text): string
     {
-        return trim(preg_replace(self::ACTIVITY_MARKER, '', $text, limit: 1), "\r\n \t");
+        foreach ([self::ACTIVITY_ID_MARKER, self::ACTIVITY_NAME_MARKER] as $marker) {
+            if (preg_match($marker, $text) === 1) {
+                return trim(preg_replace($marker, '', $text, limit: 1), "\r\n \t");
+            }
+        }
+
+        return trim($text, "\r\n \t");
     }
 
     private function isMetaLabel(string $label): bool

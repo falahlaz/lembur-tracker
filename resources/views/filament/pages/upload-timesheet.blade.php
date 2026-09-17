@@ -20,12 +20,30 @@
             kamu melihat isinya. Entri masuk sebagai pemilik API key kamu sendiri.
         </x-slot>
 
+        @if ($this->katalogError)
+            <div class="mb-5 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200">
+                <strong>Daftar project tidak bisa diambil dari Kimai.</strong>
+                {{ $this->katalogError }} Project diisi dengan ID manual, dan nama activity di
+                sheet tidak bisa diterjemahkan sampai Kimai terjangkau lagi.
+            </div>
+        @endif
+
         <form wire:submit="analyse" class="space-y-6">
             {{ $this->form }}
 
-            <x-filament::button type="submit" icon="heroicon-m-magnifying-glass" wire:target="analyse">
-                Periksa berkas
-            </x-filament::button>
+            <div class="flex flex-wrap items-center gap-3">
+                <x-filament::button type="submit" icon="heroicon-m-magnifying-glass" wire:target="analyse">
+                    Periksa berkas
+                </x-filament::button>
+
+                <x-filament::button type="button" color="gray" icon="heroicon-m-arrow-down-tray"
+                    wire:click="downloadTemplate">Unduh template</x-filament::button>
+
+                @if ($this->katalogTersedia())
+                    <x-filament::button type="button" color="gray" icon="heroicon-m-arrow-path"
+                        wire:click="muatUlangKatalog">Muat ulang daftar project</x-filament::button>
+                @endif
+            </div>
         </form>
     </x-filament::section>
 
@@ -93,7 +111,7 @@
                                 <th class="py-2 pr-3">Tanggal</th>
                                 <th class="py-2 pr-3">Jam</th>
                                 <th class="py-2 pr-3">Sheet</th>
-                                <th class="py-2 pr-3 text-right">Activity</th>
+                                <th class="py-2 pr-3">Activity</th>
                                 <th class="py-2 pr-3">Pekerjaan</th>
                                 <th class="py-2">Status</th>
                             </tr>
@@ -112,7 +130,10 @@
                                             <span class="ml-1 rounded bg-indigo-100 px-1.5 py-0.5 text-xs text-indigo-700 dark:bg-indigo-400/10 dark:text-indigo-300">{{ $entry->tag }}</span>
                                         @endif
                                     </td>
-                                    <td class="py-2 pr-3 text-right tabular-nums">{{ $entry->activity_id }}</td>
+                                    <td class="py-2 pr-3">
+                                        {{-- Nama kalau ada; sel format lama hanya punya id. --}}
+                                        {{ $entry->activity_name ?? '#'.$entry->activity_id }}
+                                    </td>
                                     <td class="py-2 pr-3">{{ Str::limit(Str::before($entry->description, "\n"), 48) }}</td>
                                     <td class="py-2 text-xs">
                                         <span @class([

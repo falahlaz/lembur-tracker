@@ -2,7 +2,9 @@
 
 namespace App\Filament\Pages;
 
+use App\Domain\Kimai\Exceptions\KimaiException;
 use App\Domain\Timesheet\Exceptions\InvalidWorkbook;
+use App\Domain\Timesheet\KimaiCatalog;
 use App\Domain\Timesheet\UploadDrafter;
 use App\Enums\UploadEntryStatus;
 use App\Enums\UploadStatus;
@@ -11,6 +13,7 @@ use App\Models\TimesheetUpload;
 use App\Models\TimesheetUploadEntry;
 use BackedEnum;
 use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -22,6 +25,11 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Computed;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use PhpOffice\PhpSpreadsheet\RichText\RichText;
+use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Mengunggah workbook timesheet lalu mengirimnya ke Kimai.
@@ -95,14 +103,176 @@ class UploadTimesheet extends Page implements HasSchemas
                     ->helperText('Sheet Daily dan Overtime dibaca dari label jam di kolom A, '
                         .'jadi jumlah barisnya boleh berbeda antar periode.'),
 
+                // Dipilih lewat NAMA. Angka id tidak bisa diverifikasi mata, dan
+                // project Kimai berganti tiap tahun — salah satu digit berarti satu
+                // periode masuk ke project orang lain.
+                Select::make('project_id')
+                    ->label('Project Kimai')
+                    ->options(fn (): array => $this->opsiProject())
+                    ->searchable()
+                    ->required()
+                    ->live()
+                    // Nama activity diresolusi terhadap project; ganti project
+                    // berarti nama yang sama bisa menunjuk id yang berbeda.
+                    ->afterStateUpdated(fn () => $this->resolveUlangActivity())
+                    ->visible(fn (): bool => $this->katalogTersedia())
+                    ->helperText('Terpilih dari baris "Project ID" di workbook setelah diperiksa.'),
+
+                // Jalur mundur: halaman tidak boleh mati hanya karena daftar project
+                // gagal dimuat. Pratinjau dan pengiriman tetap berguna dengan id
+                // yang diketik manual.
                 TextInput::make('project_id')
                     ->label('Project ID Kimai')
                     ->numeric()
                     ->required()
-                    ->helperText('Terisi dari workbook setelah diperiksa. Project Kimai berganti '
-                        .'setiap tahun — pastikan angkanya sebelum mengirim.'),
+                    ->visible(fn (): bool => ! $this->katalogTersedia())
+                    ->helperText('Daftar project tidak bisa diambil dari Kimai, jadi id-nya '
+                        .'diisi manual. Pastikan angkanya sebelum mengirim.'),
             ])
             ->statePath('data');
+    }
+
+    /** Pesan kenapa daftar project tidak tersedia; null berarti tidak ada masalah. */
+    public ?string $katalogError = null;
+
+    /** @var array<int, string>|null memo per request; options() dipanggil berkali-kali per render */
+    private ?array $opsiProjectMemo = null;
+
+    /** @return array<int, string> id => "Nama (Customer)" */
+    public function opsiProject(): array
+    {
+        if ($this->opsiProjectMemo !== null) {
+            return $this->opsiProjectMemo;
+        }
+
+        $user = Auth::user();
+
+        if ($user === null) {
+            return [];
+        }
+
+        try {
+            $projects = app(KimaiCatalog::class)->projects($user);
+            $this->katalogError = null;
+        } catch (KimaiException $e) {
+            $this->katalogError = $e->userMessage();
+
+            return $this->opsiProjectMemo = [];
+        }
+
+        $opsi = [];
+
+        foreach ($projects as $project) {
+            $opsi[$project['id']] = $project['customer'] !== null
+                ? "{$project['name']} ({$project['customer']})"
+                : $project['name'];
+        }
+
+        return $this->opsiProjectMemo = $opsi;
+    }
+
+    public function katalogTersedia(): bool
+    {
+        return $this->opsiProject() !== [];
+    }
+
+    /** Project baru di Kimai tidak perlu menunggu TTL cache. */
+    public function muatUlangKatalog(): void
+    {
+        $user = Auth::user();
+
+        if ($user === null) {
+            return;
+        }
+
+        app(KimaiCatalog::class)->forget($user);
+        $this->opsiProjectMemo = null;
+        unset($this->upload, $this->entries, $this->riwayat);
+
+        Notification::make()->success()->title('Daftar project dimuat ulang')->send();
+    }
+
+    /** Dipanggil saat project diganti setelah pratinjau sudah ada. */
+    public function resolveUlangActivity(): void
+    {
+        $upload = $this->upload();
+        $projectId = (int) ($this->data['project_id'] ?? 0);
+
+        if ($upload === null || $upload->status !== UploadStatus::Draft || $projectId <= 0) {
+            return;
+        }
+
+        try {
+            $hasil = app(UploadDrafter::class)->reresolveActivities($upload, $projectId);
+        } catch (KimaiException $e) {
+            Notification::make()->danger()->title('Activity tidak bisa diresolusi ulang')
+                ->body($e->userMessage())->send();
+
+            return;
+        }
+
+        unset($this->upload, $this->entries);
+
+        if ($hasil['diresolusi'] === 0 && $hasil['gagal'] === 0) {
+            return;
+        }
+
+        Notification::make()
+            ->status($hasil['gagal'] > 0 ? 'warning' : 'success')
+            ->title('Activity diresolusi ulang di project baru')
+            ->body($hasil['gagal'] > 0
+                ? "{$hasil['gagal']} nama tidak ada di project ini."
+                : "{$hasil['diresolusi']} entri cocok.")
+            ->send();
+    }
+
+    /**
+     * Workbook contoh dalam format yang berlaku sekarang, dibangun saat diminta.
+     * Tidak di-commit sebagai berkas: yang penting justru bentuk selnya, dan berkas
+     * biner di repo tidak bisa direview siapa pun.
+     */
+    public function downloadTemplate(): StreamedResponse
+    {
+        $book = new Spreadsheet;
+        $slots = [
+            'Daily' => ['9 AM - 10 AM', '10 AM - 12 AM', '1 PM - 3 PM', '3 PM - 5 PM', '5 PM - 6 PM'],
+            'Overtime' => [
+                '12 AM - 2 AM', '2 AM - 4 AM', '4 AM - 5 AM', '5 AM - 6 AM',
+                '9 AM - 10 AM', '10 AM - 12 AM', '1 PM - 3 PM', '3 PM - 5 PM',
+                '5 PM - 6 PM', '6 PM - 8 PM', '8 PM - 10 PM', '10 PM - 12 PM',
+            ],
+        ];
+
+        $pertama = true;
+
+        foreach ($slots as $nama => $labels) {
+            $sheet = $pertama ? $book->getActiveSheet() : $book->createSheet();
+            $pertama = false;
+            $sheet->setTitle($nama);
+
+            $sheet->setCellValue('A1', 'Customer ID')->setCellValue('B1', 112);
+            $sheet->setCellValue('A2', 'Project ID')->setCellValue('B2', (int) config('kimai.default_project'));
+
+            // Baris tanggal: kolom A sengaja dibiarkan kosong — itu penanda yang
+            // dipakai parser untuk menemukannya.
+            $sheet->setCellValue('B4', (int) ExcelDate::PHPToExcel(now()->startOfWeek()));
+
+            foreach ($labels as $i => $label) {
+                $sheet->setCellValue('A'.(5 + $i), $label);
+            }
+
+            $contoh = new RichText;
+            $contoh->createTextRun('Activity: 12_PROJECT_MEETING')->getFont()->setBold(true);
+            $contoh->createText("\n\nDaily Meeting\n1. Ganti nama activity sesuai yang ada di Kimai");
+            $sheet->setCellValue('B5', $contoh);
+        }
+
+        $writer = new XlsxWriter($book);
+
+        return response()->streamDownload(function () use ($writer, $book) {
+            $writer->save('php://output');
+            $book->disconnectWorksheets();
+        }, 'Template Timesheet.xlsx');
     }
 
     #[Computed]
