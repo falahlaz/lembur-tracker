@@ -12,7 +12,9 @@ use App\Models\LeaveClaim;
 use App\Models\OvertimeRecord;
 use App\Models\OvertimeRule;
 use App\Models\User;
+use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 
@@ -187,6 +189,17 @@ abstract class TestCase extends BaseTestCase
         $this->kimaiFaked = true;
 
         Http::fake(['*/api/timesheets*' => function ($request) {
+            // Upload menulis lewat endpoint yang sama dengan sync membacanya, jadi
+            // cabang ini harus didahulukan — kalau tidak, setiap POST akan dijawab
+            // dengan daftar entri dan terlihat "berhasil".
+            if ($request->method() === 'POST') {
+                return $this->respondToKimaiPost($request->data());
+            }
+
+            if ($this->kimaiGetStatus !== null) {
+                return Http::response('', $this->kimaiGetStatus);
+            }
+
             $size = (int) config('kimai.page_size');
             parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
             $page = max(1, (int) ($query['page'] ?? 1));
@@ -199,6 +212,62 @@ abstract class TestCase extends BaseTestCase
     }
 
     protected bool $kimaiFaked = false;
+
+    /**
+     * Membuat setiap GET gagal dengan status ini. Lewat properti, bukan Http::fake()
+     * kedua: fake menumpuk stub alih-alih menggantinya, sehingga stub pertama akan
+     * tetap menang (lihat catatan di fakeKimai()).
+     */
+    protected ?int $kimaiGetStatus = null;
+
+    /** @var array<int, array<string, mixed>> body setiap POST yang tertangkap, berurutan */
+    protected array $kimaiPosts = [];
+
+    /** Dari mana id entri palsu dimulai — jauh dari id GET supaya tidak tertukar. */
+    protected int $kimaiNextPostId = 900000;
+
+    /** @var (\Closure(array<string, mixed>, int): (Response|PromiseInterface|null))|null */
+    protected ?\Closure $kimaiPostHandler = null;
+
+    /** @return array<int, array<string, mixed>> */
+    protected function kimaiPostBodies(): array
+    {
+        return $this->kimaiPosts;
+    }
+
+    /**
+     * Membuat POST ke-$n gagal. Dipakai menguji kebijakan kegagalan: 400 hanya
+     * menjatuhkan satu entri, 401 dan 5xx menghentikan seluruh upload.
+     *
+     * @param  array<string, mixed>  $body
+     */
+    protected function failKimaiPostAt(int $n, int $status, array $body = []): void
+    {
+        $this->kimaiPostHandler = fn (array $payload, int $urutan) => $urutan === $n
+            ? Http::response($body, $status)
+            : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return Response|PromiseInterface
+     */
+    private function respondToKimaiPost(array $payload)
+    {
+        $this->kimaiPosts[] = $payload;
+
+        if ($this->kimaiPostHandler !== null) {
+            $paksa = ($this->kimaiPostHandler)($payload, count($this->kimaiPosts));
+
+            if ($paksa !== null) {
+                return $paksa;
+            }
+        }
+
+        // Kimai mengembalikan entri yang baru dibuat, termasuk id-nya — itu yang
+        // disimpan sebagai kimai_timesheet_id.
+        return Http::response($payload + ['id' => ++$this->kimaiNextPostId], 200);
+    }
 
     /** Klaim yang langsung menahan saldo (BR-20). */
     protected function submitClaim(User $user, string $date, ClaimType $type): LeaveClaim

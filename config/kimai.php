@@ -81,4 +81,31 @@ return [
 
     'timezone' => env('KIMAI_TIMEZONE', 'Asia/Jakarta'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Upload timesheet
+    |--------------------------------------------------------------------------
+    |
+    | Project id Kimai BERGANTI setiap tahun. Nilai di bawah hanya dipakai kalau
+    | workbook-nya sendiri tidak memuat baris "Project ID", dan user tetap wajib
+    | mengonfirmasinya di pratinjau — tidak pernah dipakai diam-diam.
+    |
+    */
+
+    'default_project' => (int) env('KIMAI_DEFAULT_PROJECT', 105),
+
+    /*
+    | Pagar keras: berkas yang salah bentuk tidak boleh berubah menjadi ribuan
+    | POST ke instance yang dipakai seluruh tim.
+    */
+
+    'upload_max_entries' => (int) env('KIMAI_UPLOAD_MAX_ENTRIES', 300),
+
+    /*
+    | Satu periode berarti 60–150 permintaan beruntun. Jeda kecil antar-POST
+    | menjaga instance Kimai tidak melihatnya sebagai serangan.
+    */
+
+    'upload_post_delay_ms' => (int) env('KIMAI_UPLOAD_POST_DELAY_MS', 100),
+
 ];
