@@ -13,12 +13,14 @@
          Blade mem-parse atribut komponen sendiri dan @if di sana tidak dikompilasi.
          Atributnya hilang begitu upload selesai, jadi polling berhenti sendiri.
 
-         `space-y-6` di sini BUKAN hiasan. Filament menaruh ritme vertikalnya pada
-         anak LANGSUNG dari <x-filament-panels::page>, dan satu-satunya anak langsung
-         halaman ini adalah div polling ini — jadi section di dalamnya tidak kebagian
-         jarak apa pun dan card-nya beradu border. Halaman lain tidak kena karena
-         section-nya memang anak langsung. Jangan dicabut tanpa mengganti jaraknya. --}}
-    <div class="space-y-6" @if ($berjalan) wire:poll.3s="refreshUpload" @endif>
+         `space-y-8` di sini BUKAN hiasan. Filament menaruh ritme vertikalnya pada
+         anak LANGSUNG dari <x-filament-panels::page> — `.fi-page-content` itu grid
+         dengan `row-gap: calc(var(--spacing) * 8)`, alias 2rem. Satu-satunya anak
+         langsung halaman ini adalah div polling ini, jadi section di dalamnya tidak
+         kebagian jarak apa pun dan card-nya beradu border. Halaman lain tidak kena
+         karena section-nya memang anak langsung. Angkanya sengaja 8, bukan 6: itu
+         yang menyamakan halaman ini dengan halaman panel lain. --}}
+    <div class="space-y-8" @if ($berjalan) wire:poll.3s="refreshUpload" @endif>
     <x-filament::section>
         <x-slot name="heading">Pilih berkas</x-slot>
         <x-slot name="description">
