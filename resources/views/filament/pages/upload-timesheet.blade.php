@@ -6,6 +6,7 @@
     $upload = $this->uploadSaatIni();
     $entries = $this->entries();
     $berjalan = $this->sedangBerjalan();
+    $hasil = $this->hasilSelesai();
 @endphp
 
 <x-filament-panels::page>
@@ -98,6 +99,42 @@
                     </div>
                 @endforeach
             </div>
+
+            {{-- Satu-satunya tanda "sedang jalan" dulu hanya tombol mati di DASAR
+                 tabel, dan jeda sampai 3 detik sampai tick poll berikutnya tidak
+                 berkata apa-apa. Panelnya ditaruh di atas tabel supaya terbaca tanpa
+                 menggulir, dan ikonnya benar-benar berputar: gerakan itu yang
+                 membedakan "sedang bekerja" dari "layar menggantung". CSS murni,
+                 tanpa Alpine. --}}
+            @if ($berjalan)
+                @php $kemajuan = $this->kemajuan(); @endphp
+
+                <div class="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900 dark:border-indigo-400/30 dark:bg-indigo-400/10 dark:text-indigo-200">
+                    <p class="flex items-start gap-1.5 font-medium">
+                        <x-filament::icon icon="heroicon-m-arrow-path" class="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+                        {{-- Selama masih `queued` belum ada satu baris pun yang
+                             bergerak; "Mengirim…" di situ berbohong. --}}
+                        <span>
+                            {{ $upload->status === UploadStatus::Queued
+                                ? 'Menunggu giliran di antrean…'
+                                : 'Mengirim ke Kimai…' }}
+                        </span>
+                    </p>
+
+                    @if ($kemajuan['sasaran'] > 0)
+                        {{-- Lebarnya inline, bukan kelas Tailwind: theme panel memakai
+                             source(none), jadi kelas yang dirakit dinamis tidak pernah
+                             ikut terkompilasi. Sama seperti bar di cuti-pengganti. --}}
+                        <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-indigo-200 dark:bg-white/10">
+                            <div class="h-full rounded-full bg-primary-500" style="width: {{ $kemajuan['persen'] }}%"></div>
+                        </div>
+                        <p class="mt-1 text-xs tabular-nums">
+                            {{ $kemajuan['selesai'] }} dari {{ $kemajuan['sasaran'] }} entri ·
+                            halaman ini memperbarui dirinya sendiri, tidak perlu di-refresh.
+                        </p>
+                    @endif
+                </div>
+            @endif
 
             @if (! $upload->duplicates_checked)
                 <div class="mb-5 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200">
@@ -207,6 +244,31 @@
                     <p class="mt-4 text-sm text-gray-600 dark:text-gray-400">{{ $upload->summary() }}</p>
                 @endif
             @endif
+        </x-filament::section>
+    @endif
+
+    {{-- Pratinjaunya sudah dibuang refreshUpload(), dan tanpa pengganti layar jadi
+         kosong melompong persis setelah pengiriman berhasil. Kata "Pratinjau" sengaja
+         TIDAK dipakai di sini: tes memakainya sebagai penjaga bahwa tabelnya benar-benar
+         pergi. --}}
+    @if ($hasil)
+        <x-filament::section>
+            <x-slot name="heading">Upload selesai</x-slot>
+
+            <p class="flex items-start gap-1.5 text-sm text-emerald-700 dark:text-emerald-400">
+                <x-filament::icon icon="heroicon-m-check-circle" class="mt-0.5 h-5 w-5 shrink-0" />
+                <span>{{ $hasil->summary() }} · {{ $hasil->original_filename }}</span>
+            </p>
+
+            {{-- Riwayat upload bukan halaman tersendiri, jadi ini menunjuk ke bawah,
+                 bukan ke tautan yang tidak ada. --}}
+            <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                Rinciannya tersimpan di "Riwayat upload" di bawah.
+            </p>
+
+            <div class="mt-4">
+                <x-filament::button type="button" color="gray" wire:click="tutupHasil">Tutup</x-filament::button>
+            </div>
         </x-filament::section>
     @endif
 
