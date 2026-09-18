@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -24,6 +25,16 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Jaring pengaman kalau reverse proxy di depan tidak mengirim
+        // X-Forwarded-Proto: tanpa scheme https, asset() menulis http:// di
+        // halaman https dan browser memblokir modul Filament sebagai mixed
+        // content. Jalur normalnya tetap TrustProxies di bootstrap/app.php —
+        // ini hanya dinyalakan lewat FORCE_HTTPS=true kalau proxy tidak bisa
+        // diperbaiki.
+        if (config('app.force_https')) {
+            URL::forceScheme('https');
+        }
+
         // Semua tanggal immutable: kalkulasi saldo dan cut-off berkeliling antar
         // service, dan Carbon yang mutable membuat ->addMonth() diam-diam mengubah
         // objek milik pemanggil.

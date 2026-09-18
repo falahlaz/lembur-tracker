@@ -56,6 +56,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Paksa Skema HTTPS
+    |--------------------------------------------------------------------------
+    |
+    | Jaring pengaman kalau reverse proxy di depan aplikasi tidak mengirim
+    | header X-Forwarded-Proto sama sekali. Biarkan false selama proxy sudah
+    | benar: TrustProxies di bootstrap/app.php lebih akurat karena ikut
+    | memperbaiki Request::isSecure(), secure cookie, dan $request->ip().
+    |
+    */
+
+    'force_https' => (bool) env('FORCE_HTTPS', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |

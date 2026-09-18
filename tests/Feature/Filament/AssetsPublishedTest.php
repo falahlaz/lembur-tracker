@@ -72,6 +72,78 @@ class AssetsPublishedTest extends TestCase
     }
 
     /**
+     * Berkas yang terbit saja tidak cukup: URL-nya harus memakai skema yang sama
+     * dengan halamannya. HTTPS ditutup di reverse proxy VPS, jadi php-fpm selalu
+     * melihat request http polos dan satu-satunya petunjuk skema asli adalah
+     * X-Forwarded-Proto. Sebelum `trustProxies()` dipasang di bootstrap/app.php,
+     * header itu diabaikan dan Filament menulis `http://.../select.js` di
+     * halaman https — browser memblokirnya sebagai mixed content, dan gejalanya
+     * sama persis dengan aset yang hilang: date picker jadi input readonly,
+     * select jadi kotak kosong, file upload kembali jadi "Choose File".
+     *
+     * Test tetangga di kelas ini mencocokkan substring tanpa skema, jadi
+     * kerusakan itu lolos begitu saja. Dua test berikut yang menjaganya.
+     */
+    #[Test]
+    public function url_aset_ikut_https_saat_proxy_mengirim_x_forwarded_proto(): void
+    {
+        $this->actingAs($this->employee());
+
+        $urls = $this->filamentScriptUrls(
+            OvertimeRecordResource::getUrl('create'),
+            ['X-Forwarded-Proto' => 'https'],
+        );
+
+        $this->assertContains('select.js', array_map(
+            fn (string $url) => basename(parse_url($url, PHP_URL_PATH)),
+            $urls,
+        ));
+
+        foreach ($urls as $url) {
+            $this->assertStringStartsWith(
+                'https://',
+                $url,
+                "Aset Filament masih http:// di halaman https: {$url}",
+            );
+        }
+    }
+
+    #[Test]
+    public function url_aset_tetap_http_tanpa_header_proxy(): void
+    {
+        // Dev lokal jalan di http://localhost:8080 tanpa TLS di depannya.
+        // Perbaikan skema tidak boleh memaksa https di sana.
+        $this->actingAs($this->employee());
+
+        $urls = $this->filamentScriptUrls(OvertimeRecordResource::getUrl('create'));
+
+        foreach ($urls as $url) {
+            $this->assertStringStartsWith('http://', $url);
+        }
+    }
+
+    /**
+     * Setiap URL absolut ke modul `public/js/filament/` di sebuah halaman.
+     * Host-nya sengaja tidak diasumsikan: nilainya ikut APP_URL, yang berbeda
+     * antara mesin developer dan CI.
+     *
+     * @param  array<string, string>  $headers
+     * @return list<string>
+     */
+    private function filamentScriptUrls(string $url, array $headers = []): array
+    {
+        $html = $this->get($url, $headers)->assertOk()->getContent();
+
+        preg_match_all('#https?://[^"\'\s&<>]+/js/filament/[^"\'\s&<>]+#', $html, $matches);
+
+        $urls = array_values(array_unique($matches[0]));
+
+        $this->assertNotSame([], $urls, 'Halaman tidak merujuk satu pun modul Filament.');
+
+        return $urls;
+    }
+
+    /**
      * FileUpload selalu merender `<input type="file">` di server — FilePond
      * memakainya sebagai sumber, bukan sebagai fallback. Kalau modul
      * file-upload.js tidak pernah diminta, input itu tampil apa adanya

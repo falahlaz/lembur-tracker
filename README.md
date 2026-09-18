@@ -134,6 +134,28 @@ input readonly yang kalendernya tak pernah terbuka** dan setiap **select jadi
 kotak kosong** — tanpa error di console. Build image akan gagal kalau ketiganya
 tidak terbit (lihat `Dockerfile`), dan `AssetsPublishedTest` menjaganya di CI.
 
+### Di balik reverse proxy TLS
+
+Container nginx sengaja hanya `listen 80`; HTTPS ditutup di reverse proxy VPS.
+Artinya php-fpm **selalu** melihat request http polos, dan satu-satunya petunjuk
+skema asli adalah header `X-Forwarded-Proto` dari proxy. `trustProxies()` di
+`bootstrap/app.php` yang menerjemahkannya; tanpa itu `Request::isSecure()` false
+dan `asset()` menulis `http://` di halaman `https`, lalu browser memblokir modul
+Filament sebagai *mixed content* — date picker, select, dan file upload mati
+tanpa satu pun error di console, persis seperti kalau berkasnya 404.
+
+Yang perlu diisi di `.env` produksi: `APP_URL` dengan origin https sebenarnya,
+dan `SESSION_SECURE_COOKIE=true`. Cek skemanya tanpa perlu menyentuh VPS:
+
+```bash
+curl -s -H 'X-Forwarded-Proto: https' http://localhost:8080/app/login \
+  | grep -oE 'https?://[^"]*filament[^"]*\.js' | sort -u
+```
+
+Semua baris harus `https://`. Kalau di produksi masih `http://`, reverse
+proxy-nya tidak mengirim `X-Forwarded-Proto` sama sekali — set `FORCE_HTTPS=true`
+sebagai jaring pengaman, lalu `php artisan config:cache`.
+
 `DB_USERNAME`, `DB_PASSWORD`, dan `DB_DATABASE` hanya dipakai MySQL saat volume
 dibuat pertama kali. Mengubahnya setelah itu tidak berpengaruh sampai
 `docker compose down -v` — dan itu menghapus seluruh data.
