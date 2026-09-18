@@ -130,7 +130,7 @@ class KimaiClient
      */
     public function projects(string $token): array
     {
-        $rows = $this->get($token, '/api/projects', [
+        $rows = $this->getAllPages($token, '/api/projects', [
             'visible' => 1,
             'ignoreDates' => 1,
             'orderBy' => 'name',
@@ -178,7 +178,7 @@ class KimaiClient
             $query['project'] = $projectId;
         }
 
-        $rows = $this->get($token, '/api/activities', $query);
+        $rows = $this->getAllPages($token, '/api/activities', $query);
 
         $out = [];
 
@@ -201,6 +201,59 @@ class KimaiClient
     public function ping(string $token): void
     {
         $this->get($token, '/api/timesheets', ['size' => 1]);
+    }
+
+    /**
+     * Seluruh halaman sebuah koleksi, bukan halaman pertamanya saja.
+     *
+     * /api/projects dan /api/activities sebelumnya diambil dengan SATU permintaan
+     * tanpa `page` maupun `size`, padahal Kimai memberi halaman berukuran terbatas.
+     * Selama instance-nya masih kecil cacat ini tidak kelihatan; begitu jumlah
+     * activity melewati satu halaman, sisanya hilang tanpa satu pun pesan — dan
+     * legenda yang diam-diam tidak lengkap lebih berbahaya daripada tidak ada
+     * legenda sama sekali.
+     *
+     * Dedupe per id sekaligus menjadi pagar: kalau ada versi Kimai yang MENGABAIKAN
+     * parameter `page`, halaman kedua akan berisi id yang sama persis, tidak ada id
+     * baru, dan loop berhenti — alih-alih menggandakan seluruh daftar sebanyak
+     * max_pages kali.
+     *
+     * @param  array<string, mixed>  $query
+     * @return array<int, array<string, mixed>>
+     */
+    private function getAllPages(string $token, string $path, array $query): array
+    {
+        $size = (int) config('kimai.page_size');
+        $maxPages = (int) config('kimai.max_pages');
+        $rows = [];
+
+        for ($page = 1; $page <= $maxPages; $page++) {
+            $payload = $this->get($token, $path, $query + ['size' => $size, 'page' => $page]);
+
+            $baru = 0;
+
+            foreach ($payload as $row) {
+                if (! is_array($row) || ! isset($row['id'])) {
+                    continue;
+                }
+
+                $id = (int) $row['id'];
+
+                if (! array_key_exists($id, $rows)) {
+                    $baru++;
+                }
+
+                $rows[$id] = $row;
+            }
+
+            // Halaman terakhir selalu lebih pendek dari `size`; nol id baru berarti
+            // halaman ini cuma pengulangan.
+            if (count($payload) < $size || $baru === 0) {
+                break;
+            }
+        }
+
+        return array_values($rows);
     }
 
     /**

@@ -70,6 +70,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Kunci sync katalog
+    |--------------------------------------------------------------------------
+    |
+    | Global, BUKAN per user: cermin katalog hanya ada satu, dan dua admin yang
+    | menekan tombolnya bersamaan akan saling berebut langkah pemangkasannya.
+    |
+    */
+
+    'catalog_lock_ttl' => (int) env('KIMAI_CATALOG_LOCK_TTL', 60),
+
+    /*
+    |--------------------------------------------------------------------------
     | Zona waktu
     |--------------------------------------------------------------------------
     |

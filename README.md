@@ -174,8 +174,9 @@ Upload timesheet ke Kimai hidup di `app/Domain/Timesheet/`:
 | `DuplicateDetector` | UP-04 — slot yang sudah terisi di Kimai atau sudah pernah diupload |
 | `UploadDrafter` | UP-05 — pratinjau yang disimpan, bukan ditahan di memori |
 | `UploadPoster` | UP-06 — kirim per entri, beserta kebijakan kegagalannya |
-| `KimaiCatalog` | UP-07 — daftar project dan activity, dengan cache pendek per user |
+| `KimaiCatalog` | UP-07 — daftar project dan activity, dengan cache pendek per user; jatuh ke cermin lokal saat Kimai mati |
 | `ActivityResolver` | UP-08 — nama activity di sheet jadi id Kimai |
+| `CatalogResult` | UP-09 — sebuah daftar beserta asal-usulnya (Kimai / cermin / kosong) |
 
 Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 
@@ -189,6 +190,8 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 | `SessionWriter` | SY-13–SY-15, SY-25 — sesi → record, beserta seluruh pagarnya |
 | `KimaiSynchronizer` | SY-05–SY-07 — rentang, fetch, filter, laporan |
 | `KimaiConnection` | F-11 — simpan/tes/hapus API key |
+| `KimaiCatalogSync` | LG-01 — tarik seluruh project & activity ke cermin lokal (manual, tanpa scheduler) |
+| `KimaiCatalogMirror` | LG-02 — sisi baca cermin, berbentuk sama dengan keluaran KimaiClient |
 
 ### Enam hal yang paling mudah salah
 
@@ -373,6 +376,48 @@ yang berlaku sekarang.
 Sebelum dipakai di instance baru, `php artisan lemburku:kimai:probe` sekarang ikut melaporkan
 jumlah project dan activity yang terlihat, dan apakah activity global perlu diambil terpisah.
 
+### Legenda activity, dan tombol sync milik admin
+
+Nama activity harus persis, dan satu-satunya cara memastikannya dulu adalah membuka Kimai
+di tab lain setiap kali mengisi workbook. **Pencatatan → Legenda Activity** memindahkan
+daftar itu ke tempat orang sedang bekerja:
+
+- Tabel seluruh activity beserta project-nya, bisa dicari dan difilter. Tombol salin
+  memberikan **baris siap tempel** `Activity: 31_DEV_FEATURE`, bukan namanya saja — itulah
+  bentuk yang dibaca parser. Teks yang sama juga ditampilkan biasa, karena `navigator.clipboard`
+  tidak ada di halaman non-HTTPS.
+- Memilih filter project **ikut menampilkan activity global**, karena itulah yang benar-benar
+  boleh ditulis untuk project tersebut.
+- Referensi statis di bawahnya: bentuk sel yang benar, aturan pencocokan nama, daftar label jam
+  beserta jam sungguhannya (termasuk konvensi jam 12 yang terbalik), dan daftar project beserta
+  `Project ID`-nya.
+
+Halaman ini **terbuka untuk semua user aktif**, termasuk yang belum memasang API key — justru
+merekalah yang paling membutuhkannya. Datanya tidak berasal dari token siapa pun, melainkan
+dari **cermin lokal** di tabel `kimai_projects` dan `kimai_activities`.
+
+Cermin itu diisi **admin lewat satu tombol**, `Sync Katalog Kimai` di header halaman yang sama.
+Sengaja **tanpa scheduler**: project dan activity berganti hitungan bulan sekali, jadi
+menjalankannya tiap hari hanya membuang permintaan demi jawaban yang hampir selalu "tidak ada
+perubahan". Tombolnya berjalan sinkron — tiga sampai lima GET, selesai dalam hitungan detik —
+dan notifikasinya menyebut apa yang berubah, bukan sekadar "berhasil". Padanannya di baris
+perintah, untuk menyemai deploy baru tanpa login:
+
+```sh
+php artisan lemburku:kimai:catalog          # pakai admin pertama yang punya token
+php artisan lemburku:kimai:catalog --user=3
+```
+
+Cerminnya **read-only**: hanya sync katalog yang menulisnya, tidak pernah disunting manusia,
+dan boleh dihapus lalu diisi ulang kapan saja. Kimai tetap satu-satunya sumber kebenaran.
+
+Efek sampingnya: saat Kimai **tidak terjangkau**, halaman Upload Timesheet tidak lagi memaksa
+orang mengetik id project dengan tangan. Dropdown project dan pencocokan nama activity jatuh ke
+cermin, dengan peringatan jelas yang menyebut kapan terakhir disinkronkan — activity yang dibuat
+setelah itu memang belum ada di sana. Yang tidak ikut jatuh ke cermin adalah pemeriksaan
+duplikat dan pengirimannya sendiri: keduanya tetap menuntut Kimai hidup, dan cermin tidak boleh
+membuat unggahan terlihat lebih pasti daripada kenyataannya.
+
 ### Jam dibaca dari label, bukan dari nomor baris
 
 Sheet `Daily` punya 5 baris slot, sheet `Overtime` punya 12, dan keduanya pernah bergeser.
@@ -416,6 +461,8 @@ pratinjau ada supaya itu bisa dicek sekilas sebelum mengirim.
   jadi tidak perlu migrasi struktural), approval di dalam sistem, dashboard tim.
 - **Fase 3** — sinkronisasi status ESS. Integrasi API KIMAI sudah jalan dua arah: sync
   manual menarik, Upload Timesheet mendorong. Sync otomatis harian (F-14/SY-21) belum.
+  Sync **katalog** otomatis bukan pekerjaan yang tertunda melainkan keputusan: project dan
+  activity terlalu jarang berubah untuk pantas dijadwalkan.
 - **Rentang sync setelah upload periode lama.** `SyncRangeResolver` membatasi jendela sync
   pada periode payroll berjalan, jadi mengunggah workbook bulan lalu memasukkan entrinya ke
   Kimai tetapi TIDAK otomatis menjadikannya catatan lembur di sini. Untuk periode berjalan

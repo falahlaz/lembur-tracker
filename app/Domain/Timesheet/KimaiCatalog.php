@@ -3,6 +3,7 @@
 namespace App\Domain\Timesheet;
 
 use App\Domain\Kimai\Exceptions\KimaiException;
+use App\Domain\Kimai\KimaiCatalogMirror;
 use App\Domain\Kimai\KimaiClient;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
@@ -19,7 +20,10 @@ use Illuminate\Support\Facades\Cache;
  */
 class KimaiCatalog
 {
-    public function __construct(private readonly KimaiClient $client) {}
+    public function __construct(
+        private readonly KimaiClient $client,
+        private readonly KimaiCatalogMirror $mirror,
+    ) {}
 
     /**
      * @return array<int, array{id: int, name: string, customer: ?string}>
@@ -68,6 +72,58 @@ class KimaiCatalog
                 return array_values($merged);
             },
         );
+    }
+
+    /**
+     * Kimai dulu; kalau gagal, cermin lokal hasil sync katalog admin.
+     *
+     * Dipisahkan dari projects() yang tetap MELEMPAR, bukan menggantikannya: jalur
+     * yang melempar sudah teruji dan masih dipakai di tempat yang memang harus
+     * berhenti saat Kimai mati. Yang ini untuk tempat yang lebih baik memakai
+     * daftar agak lama daripada tidak punya daftar sama sekali — asal ia
+     * mengatakannya, dan itulah gunanya CatalogResult::dariCermin().
+     */
+    public function projectsOrMirror(User $user): CatalogResult
+    {
+        // Token kosong tidak perlu diadu dengan jaringan: permintaannya pasti 401,
+        // dan 401 palsu itu akan menandai koneksi user sebagai tidak valid.
+        if (! $user->hasKimaiConnection()) {
+            return $this->cerminAtauKosong(
+                $this->mirror->projects(),
+                'API key Kimai belum tersimpan.',
+            );
+        }
+
+        try {
+            return CatalogResult::live($this->projects($user));
+        } catch (KimaiException $e) {
+            return $this->cerminAtauKosong($this->mirror->projects(), $e->userMessage());
+        }
+    }
+
+    /** Lihat catatan di projectsOrMirror(). */
+    public function activitiesOrMirror(User $user, int $projectId): CatalogResult
+    {
+        if (! $user->hasKimaiConnection()) {
+            return $this->cerminAtauKosong(
+                $this->mirror->activities($projectId),
+                'API key Kimai belum tersimpan.',
+            );
+        }
+
+        try {
+            return CatalogResult::live($this->activities($user, $projectId));
+        } catch (KimaiException $e) {
+            return $this->cerminAtauKosong($this->mirror->activities($projectId), $e->userMessage());
+        }
+    }
+
+    /** @param array<int, array<string, mixed>> $rows */
+    private function cerminAtauKosong(array $rows, string $error): CatalogResult
+    {
+        return $rows === []
+            ? CatalogResult::kosong($error)
+            : CatalogResult::mirror($rows, $error);
     }
 
     /** Dipakai tombol "Muat ulang", supaya project baru tidak perlu menunggu TTL. */

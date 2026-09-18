@@ -33,6 +33,27 @@ final readonly class SlotLabel
 
     private const MAX_HOURS = 12;
 
+    /**
+     * Label slot yang dipakai template resmi.
+     *
+     * Ini BUKAN daftar yang divalidasi — parse() menerima label apa pun yang
+     * bentuknya benar, dan memang harus begitu karena template berubah tiap tahun.
+     * Ini contoh KANONIK, dipakai bersama oleh template yang diunduh dan halaman
+     * legenda. Dulu daftarnya hidup sebagai literal di dalam
+     * UploadTimesheet::downloadTemplate(); begitu legenda ikut menampilkannya,
+     * dua salinan yang bisa berbeda diam-diam adalah soal waktu saja.
+     *
+     * @var array<string, array<int, string>>
+     */
+    public const CONTOH_SLOT = [
+        'Daily' => ['9 AM - 10 AM', '10 AM - 12 AM', '1 PM - 3 PM', '3 PM - 5 PM', '5 PM - 6 PM'],
+        'Overtime' => [
+            '12 AM - 2 AM', '2 AM - 4 AM', '4 AM - 5 AM', '5 AM - 6 AM',
+            '9 AM - 10 AM', '10 AM - 12 AM', '1 PM - 3 PM', '3 PM - 5 PM',
+            '5 PM - 6 PM', '6 PM - 8 PM', '8 PM - 10 PM', '10 PM - 12 PM',
+        ],
+    ];
+
     private function __construct(
         public string $raw,
         /** 0–23 */

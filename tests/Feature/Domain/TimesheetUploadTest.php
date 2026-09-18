@@ -516,6 +516,38 @@ class TimesheetUploadTest extends TestCase
     }
 
     #[Test]
+    public function nama_activity_dicocokkan_dari_cermin_saat_kimai_mati(): void
+    {
+        // Kalau admin sudah pernah menyinkronkan katalog, matinya Kimai tidak lagi
+        // menjatuhkan seluruh entri bernama.
+        $this->seedKimaiCatalog();
+        $this->kimaiGetStatus = 503;
+
+        $upload = $this->drafter()->draft($this->user, $this->workbookBernama(), 'Timesheet.xlsx');
+
+        $entry = $upload->entries()->firstOrFail();
+
+        $this->assertSame(8, $entry->activity_id);
+        $this->assertSame(UploadEntryStatus::Pending, $entry->status);
+    }
+
+    #[Test]
+    public function pratinjau_menyebut_kalau_activity_dicocokkan_dari_data_lokal(): void
+    {
+        // Cermin bisa tertinggal dari Kimai; pratinjau tidak boleh membuat unggahan
+        // terlihat lebih pasti daripada kenyataannya.
+        $this->seedKimaiCatalog();
+        $this->kimaiGetStatus = 503;
+
+        $upload = $this->drafter()->draft($this->user, $this->workbookBernama(), 'Timesheet.xlsx');
+
+        $this->assertStringContainsString(
+            'dicocokkan dari data lokal',
+            implode(' ', $upload->issues),
+        );
+    }
+
+    #[Test]
     public function ganti_project_meresolusi_ulang_nama_tanpa_baca_ulang_berkas(): void
     {
         $upload = $this->drafter()->draft($this->user, $this->workbookBernama(), 'Timesheet.xlsx');

@@ -144,35 +144,48 @@ class UploadDrafter
             return [];
         }
 
-        try {
-            $daftar = $this->catalog->activities($user, $projectId);
-        } catch (KimaiException $e) {
+        // Kimai dulu, cermin lokal kalau gagal. Di sini jatuh ke cermin jelas lebih
+        // baik daripada menyerah: alternatifnya SELURUH entri bernama dilewati dan
+        // unggahan itu tidak berguna sama sekali.
+        $hasil = $this->catalog->activitiesOrMirror($user, $projectId);
+
+        if (! $hasil->tersedia()) {
             // Jujur, bukan diam-diam lolos: tanpa daftar activity, tidak ada satu
             // pun nama yang bisa dipastikan benar.
             foreach ($pakaiNama as $entry) {
                 $entry->skip('Daftar activity tidak bisa diambil dari Kimai.');
             }
 
-            return ['Daftar activity tidak bisa diambil dari Kimai: '.$e->userMessage()];
+            return ['Daftar activity tidak bisa diambil dari Kimai: '.$hasil->error];
         }
 
-        $gagal = $this->activities->resolve($entries, $daftar, $this->projectLabel($user, $projectId));
+        $issues = [];
 
-        return $gagal > 0
-            ? ["{$gagal} entri memakai nama activity yang tidak dikenali di project ini."]
-            : [];
+        if ($hasil->dariCermin()) {
+            // Pratinjau tidak boleh membuat unggahan terlihat lebih pasti daripada
+            // kenyataannya: cermin bisa tertinggal dari Kimai.
+            $issues[] = 'Kimai tidak terjangkau, jadi nama activity dicocokkan dari data lokal '
+                .'hasil sync katalog terakhir. Activity yang dibuat setelah itu tidak akan ketemu.';
+        }
+
+        $gagal = $this->activities->resolve($entries, $hasil->items, $this->projectLabel($user, $projectId));
+
+        if ($gagal > 0) {
+            $issues[] = "{$gagal} entri memakai nama activity yang tidak dikenali di project ini.";
+        }
+
+        return $issues;
     }
 
     private function projectLabel(User $user, int $projectId): string
     {
-        try {
-            foreach ($this->catalog->projects($user) as $project) {
-                if ($project['id'] === $projectId) {
-                    return $project['name'];
-                }
+        // Varian yang tidak pernah melempar: label ini hanya menghias pesan
+        // kesalahan, dan cermin lokal membuatnya tetap menyebut NAMA project
+        // alih-alih "#105" saat Kimai sedang mati.
+        foreach ($this->catalog->projectsOrMirror($user)->items as $project) {
+            if ($project['id'] === $projectId) {
+                return $project['name'];
             }
-        } catch (KimaiException) {
-            // Label hanya untuk pesan kesalahan; id tetap memberi tahu yang perlu.
         }
 
         return "#{$projectId}";
@@ -186,6 +199,8 @@ class UploadDrafter
      * diunggah ulang — nama aslinya masih tersimpan di kolom activity_name.
      *
      * @return array{diresolusi: int, gagal: int}
+     *
+     * @throws KimaiException saat Kimai tidak terjangkau — lihat catatan di bawah
      */
     public function reresolveActivities(TimesheetUpload $upload, int $projectId): array
     {
@@ -199,8 +214,13 @@ class UploadDrafter
             return ['diresolusi' => 0, 'gagal' => 0];
         }
 
-        // Sengaja TIDAK ditangkap: pemanggil yang memutuskan apa yang ditampilkan
-        // kalau Kimai sedang tidak terjangkau saat user mengganti project.
+        // Sengaja TIDAK ditangkap, dan sengaja TIDAK jatuh ke cermin seperti
+        // resolveActivities(). Bedanya ada pada alternatifnya: saat analisa, tanpa
+        // daftar berarti seluruh entri dilewati dan unggahannya sia-sia; saat
+        // mengganti project, id yang sudah terlanjur benar masih ada, dan
+        // mengarahkannya ulang memakai cermin yang mungkin basi justru berisiko
+        // memindahkan jam kerja ke activity yang keliru. Pemanggil yang memutuskan
+        // apa yang ditampilkan kalau Kimai sedang tidak terjangkau.
         $daftar = $this->catalog->activities($user, $projectId);
 
         $label = $this->projectLabel($user, $projectId);
