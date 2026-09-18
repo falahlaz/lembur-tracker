@@ -59,7 +59,9 @@ services:
 
   queue:
     <<: *app
-    # Export Excel dan pengiriman email dijalankan di sini.
+    # Sync Kimai, upload timesheet, export Excel dan pengiriman email dijalankan
+    # di sini. Tanpa layanan ini tombol "Kirim … entri ke Kimai" tidak pernah
+    # selesai — upload-nya berhenti di status "Menunggu".
     command: php artisan queue:work --tries=3 --max-time=3600 --sleep=1
 
   scheduler:

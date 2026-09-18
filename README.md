@@ -38,8 +38,14 @@ Dua akun karyawan sengaja berbeda preferensi pembulatan, supaya risiko **R-2**
 
 ```bash
 php artisan schedule:work     # pemeliharaan saldo 00:05 WIB, reminder 08:00 WIB
-php artisan queue:work        # export Excel dan pengiriman email
+php artisan queue:work        # sync Kimai, upload timesheet, export Excel, email
 ```
+
+`queue:work` **wajib jalan**, bukan opsional: tombol "Sync Kimai" dan "Kirim …
+entri ke Kimai" hanya menaruh job ke antrean lalu langsung kembali. Tanpa worker,
+upload berhenti di status "Menunggu" — halaman akan menutupnya sendiri sebagai
+gagal setelah `KIMAI_LOCK_TTL` (10 menit) dan menyebutkan worker-nya, tetapi tidak
+satu pun entri sampai ke Kimai.
 
 Perintah manual:
 
@@ -196,6 +202,7 @@ Upload timesheet ke Kimai hidup di `app/Domain/Timesheet/`:
 | `DuplicateDetector` | UP-04 — slot yang sudah terisi di Kimai atau sudah pernah diupload |
 | `UploadDrafter` | UP-05 — pratinjau yang disimpan, bukan ditahan di memori |
 | `UploadPoster` | UP-06 — kirim per entri, beserta kebijakan kegagalannya |
+| `UploadRecovery` | UP-10 — upload yang macet melewati TTL kunci ditutup sendiri |
 | `KimaiCatalog` | UP-07 — daftar project dan activity, dengan cache pendek per user; jatuh ke cermin lokal saat Kimai mati |
 | `ActivityResolver` | UP-08 — nama activity di sheet jadi id Kimai |
 | `CatalogResult` | UP-09 — sebuah daftar beserta asal-usulnya (Kimai / cermin / kosong) |

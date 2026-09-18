@@ -6,6 +6,7 @@ use App\Domain\Timesheet\Exceptions\InvalidWorkbook;
 use App\Domain\Timesheet\KimaiCatalog;
 use App\Domain\Timesheet\UploadDrafter;
 use App\Domain\Timesheet\UploadPoster;
+use App\Domain\Timesheet\UploadRecovery;
 use App\Enums\UploadEntryStatus;
 use App\Enums\UploadStatus;
 use App\Jobs\PostTimesheetUpload;
@@ -14,6 +15,7 @@ use App\Models\TimesheetUpload;
 use App\Models\TimesheetUploadEntry;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use PhpOffice\PhpSpreadsheet\RichText\RichText;
@@ -618,5 +620,141 @@ class TimesheetUploadTest extends TestCase
 
         Http::assertSent(fn ($r) => str_contains($r->url(), 'project=105'));
         Http::assertSent(fn ($r) => str_contains($r->url(), 'globals=1'));
+    }
+
+    #[Test]
+    public function up_10_upload_yang_macet_di_queued_ditandai_gagal_agar_tombolnya_hidup_lagi(): void
+    {
+        $upload = $this->draft();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+        $upload->created_at = now()->subMinutes(30);
+        $upload->save();
+
+        $this->assertSame(1, UploadRecovery::failStaleUploads($this->user));
+
+        $upload->refresh();
+
+        $this->assertSame(UploadStatus::Failed, $upload->status);
+        $this->assertNotNull($upload->finished_at);
+        $this->assertStringContainsString('queue worker', (string) $upload->error_message);
+        // Status `failed` bukan `cancelled`: isResumable() membuat tombolnya
+        // langsung berubah jadi "Lanjutkan", dan entri yang belum terkirim aman.
+        $this->assertTrue($upload->status->isResumable());
+        $this->assertSame(3, $upload->pendingEntries()->count());
+    }
+
+    #[Test]
+    public function up_10_upload_yang_baru_saja_dikirim_tidak_ikut_ditandai_gagal(): void
+    {
+        $upload = $this->draft();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+
+        $this->assertSame(0, UploadRecovery::failStaleUploads($this->user));
+        $this->assertSame(UploadStatus::Queued, $upload->refresh()->status);
+    }
+
+    #[Test]
+    public function up_10_upload_posting_dinilai_dari_started_at_bukan_created_at(): void
+    {
+        // Baris yang dibuat lama tetapi baru mulai dikirim barusan masih sehat;
+        // menilainya dari created_at akan memutus upload yang sedang berjalan.
+        $upload = $this->draft();
+        $upload->forceFill([
+            'status' => UploadStatus::Posting->value,
+            'started_at' => now()->subSeconds(5),
+        ])->save();
+        $upload->created_at = now()->subHours(3);
+        $upload->save();
+
+        $this->assertSame(0, UploadRecovery::failStaleUploads($this->user));
+        $this->assertSame(UploadStatus::Posting, $upload->refresh()->status);
+
+        $upload->forceFill(['started_at' => now()->subMinutes(30)])->save();
+
+        $this->assertSame(1, UploadRecovery::failStaleUploads($this->user));
+        $this->assertSame(UploadStatus::Failed, $upload->refresh()->status);
+    }
+
+    #[Test]
+    public function up_10_penanda_cache_ikut_dibersihkan_saat_upload_ditutup(): void
+    {
+        // Statusnya saja tidak cukup: sedangBerjalan() membaca tiga penanda, dan
+        // kunci yatim berumur 10 menit akan tetap menulis "Mengirim…" untuk upload
+        // yang barusan dinyatakan gagal.
+        $upload = $this->draft();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+        $upload->created_at = now()->subMinutes(30);
+        $upload->save();
+
+        PostTimesheetUpload::markPending($this->user);
+        Cache::lock(PostTimesheetUpload::lockKey($this->user), 600)->get();
+
+        $this->assertSame(1, UploadRecovery::failStaleUploads($this->user));
+
+        $this->assertFalse(PostTimesheetUpload::isPendingFor($this->user));
+        $this->assertFalse(PostTimesheetUpload::isRunningFor($this->user));
+    }
+
+    #[Test]
+    public function up_10_penanda_cache_tidak_disentuh_kalau_tidak_ada_yang_ditutup(): void
+    {
+        // Upload yang sehat masih memegang kuncinya; membersihkannya di sini akan
+        // membuka pintu untuk upload kedua yang berjalan bersamaan.
+        $upload = $this->draft();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+
+        PostTimesheetUpload::markPending($this->user);
+
+        $this->assertSame(0, UploadRecovery::failStaleUploads($this->user));
+        $this->assertTrue(PostTimesheetUpload::isPendingFor($this->user));
+    }
+
+    #[Test]
+    public function up_10_upload_milik_orang_lain_tidak_ikut_ditutup(): void
+    {
+        $upload = $this->draft();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+        $upload->created_at = now()->subMinutes(30);
+        $upload->save();
+
+        $this->assertSame(0, UploadRecovery::failStaleUploads($this->kimaiUser()));
+        $this->assertSame(UploadStatus::Queued, $upload->refresh()->status);
+    }
+
+    #[Test]
+    public function job_yang_kalah_rebutan_kunci_tidak_menghapus_penanda_pending(): void
+    {
+        // Penandanya dulu dihapus SEBELUM kunci diambil, sehingga job kedua ikut
+        // membuang penanda milik job yang justru sedang berjalan.
+        $upload = $this->draft();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+
+        PostTimesheetUpload::markPending($this->user);
+        Cache::lock(PostTimesheetUpload::lockKey($this->user), 60)->get();
+
+        (new PostTimesheetUpload($this->user, $upload))->handle(app(UploadPoster::class));
+
+        $this->assertTrue(PostTimesheetUpload::isPendingFor($this->user));
+        $this->assertSame(UploadStatus::Queued, $upload->refresh()->status);
+        $this->assertSame([], $this->kimaiPostBodies());
+    }
+
+    #[Test]
+    public function job_tanpa_api_key_menutup_upload_sebagai_gagal(): void
+    {
+        // Token yang dicabut di antara pratinjau dan pengiriman tidak akan kembali
+        // sendiri; membiarkannya `queued` hanya menahan halaman tanpa alasan.
+        $upload = $this->draft();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+
+        $this->user->forceFill(['kimai_api_token' => null])->save();
+
+        (new PostTimesheetUpload($this->user->refresh(), $upload))->handle(app(UploadPoster::class));
+
+        $upload->refresh();
+
+        $this->assertSame(UploadStatus::Failed, $upload->status);
+        $this->assertStringContainsString('API key Kimai', (string) $upload->error_message);
+        $this->assertFalse(PostTimesheetUpload::isPendingFor($this->user));
     }
 }

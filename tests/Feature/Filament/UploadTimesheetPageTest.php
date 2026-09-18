@@ -131,7 +131,7 @@ class UploadTimesheetPageTest extends TestCase
             ->set('data.berkas', $this->berkas())
             ->set('data.project_id', 105)
             ->call('analyse')
-            ->call('commit');
+            ->call('kirim');
 
         Queue::assertPushed(PostTimesheetUpload::class);
         $this->assertSame(UploadStatus::Queued, TimesheetUpload::query()->firstOrFail()->status);
@@ -148,7 +148,7 @@ class UploadTimesheetPageTest extends TestCase
             ->call('analyse')
             ->assertSet('data.project_id', 105)
             ->set('data.project_id', 118)
-            ->call('commit');
+            ->call('kirim');
 
         $this->assertSame(118, TimesheetUpload::query()->firstOrFail()->project_id);
     }
@@ -170,19 +170,19 @@ class UploadTimesheetPageTest extends TestCase
 
         Livewire::test(UploadTimesheet::class)
             ->set('uploadId', $punyaOrangLain->id)
-            ->call('commit');
+            ->call('kirim');
 
         Queue::assertNotPushed(PostTimesheetUpload::class);
         $this->assertSame(UploadStatus::Draft, $punyaOrangLain->refresh()->status);
     }
 
     #[Test]
-    public function commit_tanpa_draf_tidak_melakukan_apa_apa(): void
+    public function mengirim_tanpa_draf_memberi_tahu_bukan_diam(): void
     {
         Queue::fake();
         $this->actingAs($this->kimaiUser());
 
-        Livewire::test(UploadTimesheet::class)->call('commit');
+        Livewire::test(UploadTimesheet::class)->call('kirim');
 
         Queue::assertNotPushed(PostTimesheetUpload::class);
     }
@@ -306,6 +306,157 @@ class UploadTimesheetPageTest extends TestCase
             ->set('data.berkas', $this->berkas())
             ->call('analyse')
             ->assertSet('data.project_id', 105);
+    }
+
+    #[Test]
+    public function mengirim_draf_yang_sudah_dibatalkan_memberi_tahu_bukan_diam(): void
+    {
+        // Menirukan tab kedua: UploadDrafter::draft() membatalkan SELURUH draf milik
+        // orang yang sama, sementara tab pertama masih merender pratinjau lamanya
+        // lengkap dengan tombol Kirim yang aktif.
+        Queue::fake();
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        TimesheetUpload::query()->update(['status' => UploadStatus::Cancelled->value]);
+
+        $page->call('kirim')
+            ->assertNotified('Draf ini sudah dibatalkan')
+            // Pratinjau hantunya ikut dilepas, supaya tombolnya tidak tinggal di layar.
+            ->assertSet('uploadId', null);
+
+        Queue::assertNotPushed(PostTimesheetUpload::class);
+    }
+
+    #[Test]
+    public function mengirim_draf_yang_sudah_terhapus_memberi_tahu_bukan_diam(): void
+    {
+        Queue::fake();
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        TimesheetUpload::query()->delete();
+
+        $page->call('kirim')
+            ->assertNotified('Draf ini sudah tidak ada')
+            ->assertSet('uploadId', null);
+
+        Queue::assertNotPushed(PostTimesheetUpload::class);
+    }
+
+    #[Test]
+    public function project_id_kosong_jatuh_ke_project_workbook_bukan_nol(): void
+    {
+        // Select yang dikosongkan mengirim string kosong, bukan null, dan (int) ''
+        // = 0. Dengan `??` saja project 0 akan lolos ke Kimai dan membuat SETIAP
+        // entri ditolak satu per satu.
+        Queue::fake();
+        $this->actingAs($this->kimaiUser());
+
+        Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse')
+            ->set('data.project_id', '')
+            ->call('kirim');
+
+        $this->assertSame(105, TimesheetUpload::query()->firstOrFail()->project_id);
+    }
+
+    #[Test]
+    public function tanpa_project_sama_sekali_pengiriman_ditolak_dengan_suara(): void
+    {
+        Queue::fake();
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        TimesheetUpload::query()->update(['project_id' => null]);
+
+        $page->set('data.project_id', '')
+            ->call('kirim')
+            ->assertNotified('Project Kimai belum dipilih');
+
+        Queue::assertNotPushed(PostTimesheetUpload::class);
+        $this->assertSame(UploadStatus::Draft, TimesheetUpload::query()->firstOrFail()->status);
+    }
+
+    #[Test]
+    public function up_10_upload_yang_nyangkut_dipulihkan_saat_halaman_dibuka_lagi(): void
+    {
+        // Job yang hilang dulu mengunci halaman ini selamanya: pratinjaunya lenyap
+        // (mount hanya memulihkan draf) sementara sedangBerjalan() tetap true,
+        // sehingga tombol Kirim mati permanen dan Batalkan tidak ikut dirender.
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+        $upload->created_at = now()->subMinutes(30);
+        $upload->save();
+
+        $segar = Livewire::test(UploadTimesheet::class);
+
+        $segar->assertSet('uploadId', $upload->id);
+        $this->assertFalse($segar->instance()->sedangBerjalan());
+        $this->assertSame(UploadStatus::Failed, $upload->refresh()->status);
+        // Tombolnya kembali — sebagai "Lanjutkan", karena entrinya masih utuh.
+        $segar->assertSee('Lanjutkan 1 entri ke Kimai');
+
+        unset($page);
+    }
+
+    #[Test]
+    public function up_10_upload_yang_nyangkut_bisa_dibuang_dari_halaman(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+        $upload->created_at = now()->subMinutes(30);
+        $upload->save();
+
+        Livewire::test(UploadTimesheet::class)
+            ->call('batalkan')
+            ->assertSet('uploadId', null);
+
+        $this->assertSame(UploadStatus::Cancelled, $upload->refresh()->status);
+    }
+
+    #[Test]
+    public function upload_yang_benar_benar_berjalan_tidak_bisa_dibuang(): void
+    {
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->forceFill(['status' => UploadStatus::Queued->value])->save();
+
+        Livewire::test(UploadTimesheet::class)
+            ->call('batalkan')
+            ->assertNotified('Upload masih berjalan')
+            ->assertSet('uploadId', $upload->id);
+
+        $this->assertSame(UploadStatus::Queued, $upload->refresh()->status);
     }
 
     #[Test]

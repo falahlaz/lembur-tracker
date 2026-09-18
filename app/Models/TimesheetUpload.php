@@ -62,6 +62,28 @@ class TimesheetUpload extends Model
         return $query->where('status', UploadStatus::Draft->value);
     }
 
+    /**
+     * Upload yang masih pantas ditampilkan sebagai pratinjau saat halaman dibuka:
+     * belum dikirim, sedang dikirim, atau berhenti di tengah dengan sisa entri.
+     *
+     * Yang `failed`/`partial` TANPA sisa entri sengaja tidak ikut — pratinjaunya
+     * tidak bisa diapa-apakan lagi, dan tempatnya memang di Riwayat upload.
+     */
+    public function scopeBelumSelesai(Builder $query): Builder
+    {
+        return $query->where(fn (Builder $q) => $q
+            ->whereIn('status', [
+                UploadStatus::Draft->value,
+                UploadStatus::Queued->value,
+                UploadStatus::Posting->value,
+            ])
+            ->orWhere(fn (Builder $q) => $q
+                ->whereIn('status', [UploadStatus::Failed->value, UploadStatus::Partial->value])
+                ->whereHas('entries', fn ($q) => $q->where('status', UploadEntryStatus::Pending->value))
+            )
+        );
+    }
+
     public function isActive(): bool
     {
         return $this->status->isActive();
