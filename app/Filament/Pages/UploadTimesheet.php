@@ -554,6 +554,20 @@ class UploadTimesheet extends Page implements HasSchemas
         }
 
         if ($upload->pendingEntries()->doesntExist()) {
+            // Drafnya ditutup, bukan dibiarkan hidup: pratinjau tanpa satu pun baris
+            // yang bisa dikirim tidak punya langkah berikutnya, dan scopeBelumSelesai()
+            // akan memulihkannya lagi di setiap kunjungan berikutnya selama statusnya
+            // masih `draft` — kartu yang sama menyambut orang terus-menerus sampai ia
+            // menebak bahwa Batalkan adalah jalan keluarnya.
+            //
+            // HANYA `draft`. Upload yang sudah terlanjur mengirim sebagian tidak boleh
+            // berubah jadi "Dibatalkan" di Riwayat: itu berbohong tentang entri yang
+            // benar-benar masuk ke Kimai.
+            if ($upload->status === UploadStatus::Draft) {
+                app(UploadDrafter::class)->cancel($upload);
+                $this->lupakanDraf();
+            }
+
             Notification::make()->warning()->title('Tidak ada entri yang perlu dikirim')
                 ->body('Semua barisnya sudah terkirim atau dilewati.')->send();
 
@@ -601,10 +615,44 @@ class UploadTimesheet extends Page implements HasSchemas
         unset($this->uploadSaatIni, $this->entries, $this->riwayat);
     }
 
-    /** Target wire:poll selama upload berjalan. */
+    /**
+     * Target wire:poll selama upload berjalan; sekaligus penutup pratinjau yang tuntas.
+     *
+     * Di sinilah satu-satunya tempat browser bisa tahu job-nya sudah selesai:
+     * pengiriman berjalan di queue, dan queue tidak bisa menyentuh properti komponen.
+     * Tanpa pembersihan di sini, upload yang SELESAI meninggalkan kartu pratinjau
+     * berisi baris "Terkirim" tanpa satu tombol pun di bawahnya — polling sudah
+     * berhenti, dan kartunya baru lenyap kalau halamannya dimuat ulang dengan tangan.
+     *
+     * Hanya `success`. Yang `partial`/`failed` sengaja DITAHAN di layar: baris
+     * merahnya satu-satunya tempat alasan kegagalan per entri terbaca, dan yang masih
+     * menyisakan entri `pending` punya tombol "Lanjutkan" yang harus tetap terjangkau.
+     *
+     * sedangBerjalan() tetap dijaga karena ada celah kecil antara UploadPoster::close()
+     * dan lepasnya penanda job: di sana statusnya sudah `success` sementara halaman
+     * masih menampilkan tombol "Mengirim…". Melewatkan tick itu aman — $berjalan yang
+     * masih true membuat atribut wire:poll bertahan, jadi tick berikutnya yang
+     * membersihkan.
+     */
     public function refreshUpload(): void
     {
         unset($this->uploadSaatIni, $this->entries, $this->riwayat);
+
+        $upload = $this->uploadSaatIni();
+
+        if ($upload === null || $upload->status !== UploadStatus::Success || $this->sedangBerjalan()) {
+            return;
+        }
+
+        // Dibaca sebelum lupakanDraf(); setelahnya uploadSaatIni() sudah null.
+        $ringkasan = $upload->summary();
+
+        // Form sengaja tidak diisi ulang: project yang barusan dipakai adalah tebakan
+        // terbaik untuk berkas berikutnya. Beda dari batalkan(), yang memang
+        // mengembalikan pilihannya ke default.
+        $this->lupakanDraf();
+
+        Notification::make()->success()->title('Upload selesai')->body($ringkasan)->send();
     }
 
     public function sedangBerjalan(): bool
