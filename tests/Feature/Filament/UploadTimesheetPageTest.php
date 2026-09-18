@@ -4,6 +4,7 @@ namespace Tests\Feature\Filament;
 
 use App\Domain\Timesheet\TimesheetWorkbookParser;
 use App\Domain\Timesheet\WorkbookReader;
+use App\Enums\UploadEntryStatus;
 use App\Enums\UploadStatus;
 use App\Filament\Pages\UploadTimesheet;
 use App\Jobs\PostTimesheetUpload;
@@ -457,6 +458,113 @@ class UploadTimesheetPageTest extends TestCase
             ->assertSet('uploadId', $upload->id);
 
         $this->assertSame(UploadStatus::Queued, $upload->refresh()->status);
+    }
+
+    #[Test]
+    public function pratinjau_hilang_sendiri_setelah_upload_selesai(): void
+    {
+        // Pengiriman berjalan di queue, jadi tick wire:poll inilah satu-satunya
+        // kesempatan halaman membereskan kartunya sendiri. Dulu kartu pratinjaunya
+        // tertinggal berisi baris "Terkirim" tanpa satu tombol pun, dan baru lenyap
+        // kalau halamannya dimuat ulang dengan tangan.
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->entries()->update(['status' => UploadEntryStatus::Posted->value]);
+        $upload->forceFill([
+            'status' => UploadStatus::Success->value,
+            'count_posted' => 1,
+            'finished_at' => now(),
+        ])->save();
+
+        // Instance yang sama, bukan Livewire::test() baru: yang diuji justru halaman
+        // yang TETAP terbuka selagi job-nya selesai di belakang layar.
+        $page->assertSet('uploadId', $upload->id)
+            ->call('refreshUpload')
+            ->assertSet('uploadId', null)
+            ->assertNotified('Upload selesai')
+            ->assertDontSee('Pratinjau')
+            // Hilang dari pratinjau, bukan hilang sama sekali.
+            ->assertSee('Upload selesai · 1 entri terkirim');
+    }
+
+    #[Test]
+    public function pratinjau_bertahan_saat_ada_entri_yang_gagal(): void
+    {
+        // Baris merah beserta alasannya cuma ada di kartu ini; membersihkannya
+        // otomatis berarti membuang satu-satunya keterangan kenapa entri itu ditolak.
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->entries()->update([
+            'status' => UploadEntryStatus::Failed->value,
+            'skip_reason' => 'Activity 25 tidak ada di project ini.',
+        ]);
+        $upload->forceFill([
+            'status' => UploadStatus::Failed->value,
+            'count_failed' => 1,
+            'finished_at' => now(),
+        ])->save();
+
+        $page->call('refreshUpload')
+            ->assertSet('uploadId', $upload->id)
+            ->assertSee('Activity 25 tidak ada di project ini.');
+    }
+
+    #[Test]
+    public function pratinjau_bertahan_selama_penanda_upload_masih_hidup(): void
+    {
+        // Celah antara UploadPoster::close() dan lepasnya penanda job: statusnya
+        // sudah success sementara tombolnya masih "Mengirim…". Kartunya tidak boleh
+        // hilang di detik itu — tick berikutnya yang membersihkan.
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->forceFill(['status' => UploadStatus::Success->value, 'count_posted' => 1])->save();
+
+        PostTimesheetUpload::markPending($user);
+
+        $page->call('refreshUpload')->assertSet('uploadId', $upload->id);
+    }
+
+    #[Test]
+    public function draf_tanpa_entri_yang_bisa_dikirim_ditutup_saat_kirim(): void
+    {
+        // Berkas yang seluruh barisnya sudah pernah diupload: tanpa penutupan ini
+        // drafnya tetap `draft`, dan mount() menyambut orang dengan kartu yang sama
+        // di setiap kunjungan berikutnya.
+        Queue::fake();
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->entries()->update([
+            'status' => UploadEntryStatus::Skipped->value,
+            'skip_reason' => 'Sudah pernah diupload dari sini.',
+        ]);
+
+        $page->call('kirim')
+            ->assertNotified('Tidak ada entri yang perlu dikirim')
+            ->assertSet('uploadId', null);
+
+        Queue::assertNotPushed(PostTimesheetUpload::class);
+        $this->assertSame(UploadStatus::Cancelled, $upload->refresh()->status);
     }
 
     #[Test]
