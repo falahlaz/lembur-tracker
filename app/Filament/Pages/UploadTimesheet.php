@@ -69,6 +69,17 @@ class UploadTimesheet extends Page implements HasSchemas
 
     public ?int $uploadId = null;
 
+    /**
+     * Upload yang BARU SAJA selesai, untuk panel hasil yang menggantikan pratinjau.
+     *
+     * Sengaja terpisah dari $uploadId: pratinjaunya sudah dibuang (tabelnya tidak
+     * bisa diapa-apakan lagi), tetapi layar tidak boleh mendadak kosong begitu saja.
+     * Sama seperti $uploadId, yang disimpan cuma satu id — badan datanya tetap di
+     * database. mount() sengaja TIDAK memulihkannya: panel ini kabar sesaat, dan
+     * riwayatnya sudah punya tempat sendiri di seksi "Riwayat upload".
+     */
+    public ?int $hasilId = null;
+
     /** Hanya relevan bagi yang sudah memasang API key, seperti Riwayat Sync. */
     public static function canAccess(): bool
     {
@@ -375,6 +386,19 @@ class UploadTimesheet extends Page implements HasSchemas
         return $this->uploadSaatIni()?->entries()->orderBy('begin_at')->orderBy('id')->get() ?? collect();
     }
 
+    /** Upload yang baru saja selesai; kembaran uploadSaatIni() untuk panel hasil. */
+    #[Computed]
+    public function hasilSelesai(): ?TimesheetUpload
+    {
+        if ($this->hasilId === null) {
+            return null;
+        }
+
+        return TimesheetUpload::query()
+            ->where('user_id', Auth::id())
+            ->find($this->hasilId);
+    }
+
     /** @return Collection<int, TimesheetUpload> */
     #[Computed]
     public function riwayat(): Collection
@@ -647,12 +671,25 @@ class UploadTimesheet extends Page implements HasSchemas
         // Dibaca sebelum lupakanDraf(); setelahnya uploadSaatIni() sudah null.
         $ringkasan = $upload->summary();
 
+        // Tabelnya pergi, kabarnya tinggal. Tanpa ini layar mendadak kosong persis
+        // di detik orang paling ingin tahu hasilnya — dan toast bisa terlewat kalau
+        // tabnya sedang di belakang.
+        $this->hasilId = $upload->id;
+        unset($this->hasilSelesai);
+
         // Form sengaja tidak diisi ulang: project yang barusan dipakai adalah tebakan
         // terbaik untuk berkas berikutnya. Beda dari batalkan(), yang memang
         // mengembalikan pilihannya ke default.
         $this->lupakanDraf();
 
         Notification::make()->success()->title('Upload selesai')->body($ringkasan)->send();
+    }
+
+    /** Menutup panel hasil. Namanya BUKAN close() — itu salah satu alias $wire. */
+    public function tutupHasil(): void
+    {
+        $this->hasilId = null;
+        unset($this->hasilSelesai);
     }
 
     public function sedangBerjalan(): bool
@@ -666,6 +703,35 @@ class UploadTimesheet extends Page implements HasSchemas
         return PostTimesheetUpload::isPendingFor($user)
             || PostTimesheetUpload::isRunningFor($user)
             || TimesheetUpload::query()->where('user_id', $user->id)->active()->exists();
+    }
+
+    /**
+     * Sudah sampai mana pengirimannya.
+     *
+     * Dihitung dari status per entri, BUKAN dari count_posted: kolom itu baru ditulis
+     * UploadPoster::close() setelah seluruh perulangannya selesai, jadi sepanjang job
+     * berjalan angkanya tetap 0. Status per baris justru commit satu per satu begitu
+     * respons Kimai datang (UploadPoster sengaja tanpa transaksi), dan entries() memang
+     * sudah dimuat untuk tabelnya — jadi angka ini tidak menambah satu query pun.
+     *
+     * `sasaran` adalah seluruh entri yang bukan `skipped`, bukan hanya yang `pending`:
+     * saat "Lanjutkan", baris yang sudah masuk di percobaan sebelumnya ikut dihitung
+     * selesai, sehingga barnya tidak mundur ke nol.
+     *
+     * @return array{selesai: int, sasaran: int, persen: int}
+     */
+    public function kemajuan(): array
+    {
+        $entries = $this->entries();
+
+        $sasaran = $entries->where('status', '!=', UploadEntryStatus::Skipped)->count();
+        $selesai = $entries->whereIn('status', [UploadEntryStatus::Posted, UploadEntryStatus::Failed])->count();
+
+        return [
+            'selesai' => $selesai,
+            'sasaran' => $sasaran,
+            'persen' => $sasaran > 0 ? (int) round($selesai / $sasaran * 100) : 0,
+        ];
     }
 
     /** @return array<string, int> */

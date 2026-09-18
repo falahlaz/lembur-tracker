@@ -568,6 +568,105 @@ class UploadTimesheetPageTest extends TestCase
     }
 
     #[Test]
+    public function kemajuan_pengiriman_terbaca_selama_job_berjalan(): void
+    {
+        // Tombol mati bertuliskan "Mengirim…" di dasar tabel tidak menjawab satu-satunya
+        // pertanyaan yang orang punya selama menunggu: sudah sampai mana.
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->forceFill(['status' => UploadStatus::Posting->value])->save();
+        PostTimesheetUpload::markPending($user);
+
+        $page->call('refreshUpload')
+            ->assertSee('Mengirim ke Kimai')
+            ->assertSee('0 dari 1 entri');
+
+        // Status per entri commit satu per satu selagi job berjalan, jadi angkanya
+        // memang bergerak di antara dua tick.
+        $upload->entries()->update(['status' => UploadEntryStatus::Posted->value]);
+
+        $page->call('refreshUpload')->assertSee('1 dari 1 entri');
+    }
+
+    #[Test]
+    public function antrean_tidak_mengaku_sedang_mengirim(): void
+    {
+        // Selama masih `queued` belum ada satu baris pun yang bergerak.
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        TimesheetUpload::query()->update(['status' => UploadStatus::Queued->value]);
+        PostTimesheetUpload::markPending($user);
+
+        $page->call('refreshUpload')
+            ->assertSee('Menunggu giliran')
+            ->assertDontSee('Mengirim ke Kimai');
+    }
+
+    #[Test]
+    public function panel_hasil_menggantikan_pratinjau_setelah_upload_selesai(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->entries()->update(['status' => UploadEntryStatus::Posted->value]);
+        $upload->forceFill([
+            'status' => UploadStatus::Success->value,
+            'count_posted' => 1,
+            'finished_at' => now(),
+        ])->save();
+
+        // Tabelnya pergi, kabarnya tinggal — bukan layar kosong.
+        $page->call('refreshUpload')
+            ->assertSet('hasilId', $upload->id)
+            ->assertDontSee('Pratinjau')
+            // Kalimat milik panel; "Upload selesai · …" saja juga dicetak seksi
+            // Riwayat, jadi itu tidak membuktikan panelnya ada.
+            ->assertSee('Rinciannya tersimpan di')
+            ->assertSee('Upload selesai · 1 entri terkirim')
+            ->assertSee('Timesheet Agustus.xlsx');
+    }
+
+    #[Test]
+    public function panel_hasil_bisa_ditutup(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $page = Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse');
+
+        $upload = TimesheetUpload::query()->firstOrFail();
+        $upload->entries()->update(['status' => UploadEntryStatus::Posted->value]);
+        $upload->forceFill([
+            'status' => UploadStatus::Success->value,
+            'count_posted' => 1,
+            'finished_at' => now(),
+        ])->save();
+
+        $page->call('refreshUpload')
+            ->call('tutupHasil')
+            ->assertSet('hasilId', null)
+            ->assertDontSee('Rinciannya tersimpan di')
+            // Riwayat upload tetap menyimpannya; yang hilang cuma panelnya.
+            ->assertSee('Upload selesai · 1 entri terkirim');
+    }
+
+    #[Test]
     public function template_yang_diunduh_bisa_dibaca_balik_oleh_parser(): void
     {
         // Template yang tidak bisa dibaca aplikasinya sendiri lebih buruk daripada
