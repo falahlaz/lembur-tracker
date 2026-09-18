@@ -11,8 +11,14 @@
 <x-filament-panels::page>
     {{-- Polling menempel pada elemen biasa, bukan pada atribut tag komponen:
          Blade mem-parse atribut komponen sendiri dan @if di sana tidak dikompilasi.
-         Atributnya hilang begitu upload selesai, jadi polling berhenti sendiri. --}}
-    <div @if ($berjalan) wire:poll.3s="refreshUpload" @endif>
+         Atributnya hilang begitu upload selesai, jadi polling berhenti sendiri.
+
+         `space-y-6` di sini BUKAN hiasan. Filament menaruh ritme vertikalnya pada
+         anak LANGSUNG dari <x-filament-panels::page>, dan satu-satunya anak langsung
+         halaman ini adalah div polling ini — jadi section di dalamnya tidak kebagian
+         jarak apa pun dan card-nya beradu border. Halaman lain tidak kena karena
+         section-nya memang anak langsung. Jangan dicabut tanpa mengganti jaraknya. --}}
+    <div class="space-y-6" @if ($berjalan) wire:poll.3s="refreshUpload" @endif>
     <x-filament::section>
         <x-slot name="heading">Pilih berkas</x-slot>
         <x-slot name="description">
