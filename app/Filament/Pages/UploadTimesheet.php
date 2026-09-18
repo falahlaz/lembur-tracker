@@ -9,6 +9,7 @@ use App\Domain\Timesheet\Exceptions\InvalidWorkbook;
 use App\Domain\Timesheet\KimaiCatalog;
 use App\Domain\Timesheet\SlotLabel;
 use App\Domain\Timesheet\UploadDrafter;
+use App\Domain\Timesheet\UploadRecovery;
 use App\Enums\UploadEntryStatus;
 use App\Enums\UploadStatus;
 use App\Jobs\PostTimesheetUpload;
@@ -74,14 +75,41 @@ class UploadTimesheet extends Page implements HasSchemas
         return Auth::user()?->hasKimaiConnection() ?? false;
     }
 
+    /**
+     * UP-10 — satu kali per request, SEBELUM apa pun membaca status upload.
+     *
+     * Sengaja di booted(), bukan di dalam sedangBerjalan(): kalau pemulihannya
+     * dijalankan belakangan, baris yang sudah terlanjur dibaca (dan di-cache
+     * #[Computed]) masih membawa status lama, dan tombolnya menawarkan "Kirim"
+     * untuk upload yang barusan ditutup sebagai gagal. Di sini seluruh pembaca
+     * melihat keadaan yang sama.
+     *
+     * Kembaran SyncsWithKimai::kimaiSyncIsRunning() yang memanggil
+     * KimaiSynchronizer::failStaleRuns() dengan alasan yang sama.
+     */
+    public function booted(): void
+    {
+        $user = Auth::user();
+
+        if ($user !== null) {
+            UploadRecovery::failStaleUploads($user);
+        }
+    }
+
     public function mount(): void
     {
         // Draf yang ditinggalkan dipulihkan: pratinjaunya sudah menghabiskan satu
         // perjalanan ke Kimai, dan orang memang wajar menutup tab dulu untuk
         // memastikan project id ke PM-nya.
+        //
+        // Bukan hanya `draft`. Upload yang sedang berjalan atau berhenti di tengah
+        // juga dipulihkan: kalau tidak, refresh saat upload nyangkut membuat
+        // SELURUH pratinjau lenyap dan yang tersisa hanya form kosong yang tampak
+        // normal — padahal tombol Kirim di bawahnya tetap mati karena upload lama
+        // masih aktif. Layar harus menunjukkan keadaan yang sebenarnya.
         $draft = TimesheetUpload::query()
             ->where('user_id', Auth::id())
-            ->draft()
+            ->belumSelesai()
             ->latest('id')
             ->first();
 
@@ -237,7 +265,7 @@ class UploadTimesheet extends Page implements HasSchemas
 
         app(KimaiCatalog::class)->forget($user);
         $this->katalogMemo = null;
-        unset($this->upload, $this->entries, $this->riwayat);
+        unset($this->uploadSaatIni, $this->entries, $this->riwayat);
 
         Notification::make()->success()->title('Daftar project dimuat ulang')->send();
     }
@@ -245,7 +273,7 @@ class UploadTimesheet extends Page implements HasSchemas
     /** Dipanggil saat project diganti setelah pratinjau sudah ada. */
     public function resolveUlangActivity(): void
     {
-        $upload = $this->upload();
+        $upload = $this->uploadSaatIni();
         $projectId = (int) ($this->data['project_id'] ?? 0);
 
         if ($upload === null || $upload->status !== UploadStatus::Draft || $projectId <= 0) {
@@ -261,7 +289,7 @@ class UploadTimesheet extends Page implements HasSchemas
             return;
         }
 
-        unset($this->upload, $this->entries);
+        unset($this->uploadSaatIni, $this->entries);
 
         if ($hasil['diresolusi'] === 0 && $hasil['gagal'] === 0) {
             return;
@@ -320,8 +348,16 @@ class UploadTimesheet extends Page implements HasSchemas
         }, 'Template Timesheet.xlsx');
     }
 
+    /**
+     * Draf/upload yang sedang dilihat.
+     *
+     * Namanya BUKAN `upload()`. Livewire memesan sederet nama pendek di objek
+     * `$wire` — daftarnya ada di `aliases` dalam `livewire.esm.js` — dan `upload`
+     * salah satunya. Method komponen yang bernama sama tidak akan pernah
+     * terjangkau dari sisi browser; lihat catatan panjang di kirim().
+     */
     #[Computed]
-    public function upload(): ?TimesheetUpload
+    public function uploadSaatIni(): ?TimesheetUpload
     {
         if ($this->uploadId === null) {
             return null;
@@ -336,7 +372,7 @@ class UploadTimesheet extends Page implements HasSchemas
     #[Computed]
     public function entries(): Collection
     {
-        return $this->upload()?->entries()->orderBy('begin_at')->orderBy('id')->get() ?? collect();
+        return $this->uploadSaatIni()?->entries()->orderBy('begin_at')->orderBy('id')->get() ?? collect();
     }
 
     /** @return Collection<int, TimesheetUpload> */
@@ -377,7 +413,7 @@ class UploadTimesheet extends Page implements HasSchemas
         }
 
         $this->uploadId = $upload->id;
-        unset($this->upload, $this->entries, $this->riwayat);
+        unset($this->uploadSaatIni, $this->entries, $this->riwayat);
 
         $this->form->fill(['project_id' => $upload->project_id]);
 
@@ -395,53 +431,131 @@ class UploadTimesheet extends Page implements HasSchemas
     /** Mengembalikan entri yang bentroknya cuma sebagian ke antrean kirim. */
     public function sertakanBentrok(): void
     {
-        $upload = $this->upload();
+        $upload = $this->uploadSaatIni();
 
         if ($upload === null || $upload->status !== UploadStatus::Draft) {
             return;
         }
 
         $jumlah = app(UploadDrafter::class)->includeOverridable($upload);
-        unset($this->upload, $this->entries);
+        unset($this->uploadSaatIni, $this->entries);
 
         Notification::make()->success()->title("{$jumlah} entri bentrok ikut dikirim")->send();
     }
 
+    /**
+     * Membuang pratinjau yang sedang dilihat.
+     *
+     * Berlaku juga untuk upload yang berhenti di tengah — dulu hanya `draft`, dan
+     * itulah kenapa upload yang nyangkut sama sekali tidak punya jalan keluar dari
+     * layar ini. Yang benar-benar masih berjalan tetap ditolak, tetapi ditolak
+     * dengan suara, bukan dengan tombol yang hilang tanpa penjelasan.
+     */
     public function batalkan(): void
     {
-        $upload = $this->upload();
+        $upload = $this->uploadSaatIni()?->refresh();
 
-        if ($upload !== null && $upload->status === UploadStatus::Draft) {
-            app(UploadDrafter::class)->cancel($upload);
-        }
+        if ($upload !== null && $upload->isActive() && $this->sedangBerjalan()) {
+            Notification::make()->warning()->title('Upload masih berjalan')
+                ->body('Tunggu sampai selesai dulu, atau coba lagi beberapa menit lagi.')->send();
 
-        $this->uploadId = null;
-        unset($this->upload, $this->entries, $this->riwayat);
-        $this->form->fill(['project_id' => (int) config('kimai.default_project')]);
-    }
-
-    /** Langkah 2 — menaruh job ke queue dan langsung kembali. */
-    public function commit(): void
-    {
-        $upload = $this->upload();
-        $user = Auth::user();
-
-        if ($upload === null || $user === null) {
             return;
         }
 
-        if (! in_array($upload->status, [UploadStatus::Draft, UploadStatus::Failed, UploadStatus::Partial], true)) {
+        if ($upload !== null && ! in_array($upload->status, [UploadStatus::Success, UploadStatus::Cancelled], true)) {
+            app(UploadDrafter::class)->cancel($upload);
+        }
+
+        $this->lupakanDraf();
+        $this->form->fill(['project_id' => (int) config('kimai.default_project')]);
+    }
+
+    /**
+     * Langkah 2 — menaruh job ke queue dan langsung kembali.
+     *
+     * NAMANYA PENTING. Method ini dulu bernama `commit()` dan tombolnya memanggil
+     * `wire:click="commit"` — dan tidak pernah sekali pun sampai ke sini. Livewire
+     * memesan sederet nama pendek di objek `$wire` (`aliases` di `livewire.esm.js`:
+     * on, el, id, js, get, set, call, hook, commit, watch, entangle, dispatch,
+     * dispatchTo, dispatchSelf, upload, uploadMultiple, removeUpload, cancelUpload),
+     * dan daftar itu diperiksa LEBIH DULU daripada method komponen. `$wire.commit`
+     * karena itu menunjuk `$commit` milik Livewire — sinkronisasi state biasa yang
+     * mengirim `calls: []`. Servernya membalas 200 dengan render yang identik, jadi
+     * dari layar tidak ada bedanya dengan klik yang tidak pernah terkirim: tombolnya
+     * diam, tanpa notifikasi, tanpa error. Persis bug yang dilaporkan.
+     *
+     * Tidak ada peringatan apa pun untuk tabrakan ini — tidak dari Livewire, tidak
+     * dari Filament, dan `Livewire::test()->call('commit')` tetap hijau karena
+     * memanggil PHP-nya langsung tanpa melewati `$wire`. Penjaganya sekarang
+     * LivewireNamingTest, bukan ingatan orang.
+     */
+    public function kirim(): void
+    {
+        $user = Auth::user();
+
+        if ($user === null) {
+            Notification::make()->danger()->title('Sesi tidak dikenali')
+                ->body('Coba muat ulang halamannya lalu masuk lagi.')->send();
+
+            return;
+        }
+
+        if ($this->uploadId === null) {
+            Notification::make()->warning()->title('Tidak ada draf yang bisa dikirim')
+                ->body('Periksa berkasnya dulu, lalu kirim.')->send();
+
+            return;
+        }
+
+        // Dibaca ulang dari database, bukan dari baris yang terbaca saat render:
+        // draf bisa berubah di antara keduanya — analisa di tab lain membatalkan
+        // SELURUH draf milik orang yang sama (lihat UploadDrafter::draft()).
+        $upload = $this->uploadSaatIni()?->refresh();
+
+        if ($upload === null) {
+            $this->lupakanDraf();
+
+            Notification::make()->danger()->title('Draf ini sudah tidak ada')
+                ->body('Pratinjaunya sudah tidak berlaku. Periksa berkasnya sekali lagi.')->send();
+
+            return;
+        }
+
+        if ($upload->status === UploadStatus::Cancelled) {
+            $this->lupakanDraf();
+
+            Notification::make()->warning()->title('Draf ini sudah dibatalkan')
+                ->body('Biasanya karena berkas lain diperiksa di tab lain. Periksa berkasnya sekali lagi.')
+                ->send();
+
+            return;
+        }
+
+        if ($upload->status === UploadStatus::Success) {
+            Notification::make()->success()->title('Upload ini sudah selesai')
+                ->body($upload->summary())->send();
+
             return;
         }
 
         if ($this->sedangBerjalan()) {
-            Notification::make()->warning()->title('Masih ada upload yang berjalan')->send();
+            Notification::make()->warning()->title('Masih ada upload yang berjalan')
+                ->body('Tunggu sampai selesai; hasilnya muncul sendiri di halaman ini.')->send();
+
+            return;
+        }
+
+        if (! $upload->status->isResumable() && $upload->status !== UploadStatus::Draft) {
+            // Sisa yang tidak terduga — jangan pernah diam, sebut statusnya.
+            Notification::make()->warning()->title('Upload ini tidak bisa dikirim')
+                ->body("Statusnya sekarang \"{$upload->status->getLabel()}\".")->send();
 
             return;
         }
 
         if ($upload->pendingEntries()->doesntExist()) {
-            Notification::make()->warning()->title('Tidak ada entri yang perlu dikirim')->send();
+            Notification::make()->warning()->title('Tidak ada entri yang perlu dikirim')
+                ->body('Semua barisnya sudah terkirim atau dilewati.')->send();
 
             return;
         }
@@ -450,7 +564,18 @@ class UploadTimesheet extends Page implements HasSchemas
         // memvalidasi seluruh form, termasuk field berkas yang required — dan
         // field itu memang sudah dikosongkan setelah pratinjau selesai dibuat.
         // Pengiriman tidak butuh berkasnya lagi; drafnya sudah ada di database.
-        $project = (int) ($this->data['project_id'] ?? $upload->project_id);
+        //
+        // Select yang dikosongkan mengirim string kosong, bukan null, jadi `??`
+        // saja tidak cukup: (int) '' = 0, dan project 0 berarti seluruh entri
+        // ditolak Kimai satu per satu.
+        $project = (int) ($this->data['project_id'] ?? 0) ?: (int) $upload->project_id;
+
+        if ($project <= 0) {
+            Notification::make()->danger()->title('Project Kimai belum dipilih')
+                ->body('Pilih project-nya dulu; tanpa itu entri tidak punya tujuan.')->send();
+
+            return;
+        }
 
         $upload->forceFill([
             'project_id' => $project,
@@ -460,7 +585,7 @@ class UploadTimesheet extends Page implements HasSchemas
         PostTimesheetUpload::markPending($user);
         PostTimesheetUpload::dispatch($user, $upload);
 
-        unset($this->upload, $this->entries, $this->riwayat);
+        unset($this->uploadSaatIni, $this->entries, $this->riwayat);
 
         Notification::make()
             ->success()
@@ -469,10 +594,17 @@ class UploadTimesheet extends Page implements HasSchemas
             ->send();
     }
 
+    /** Melepas pratinjau yang sudah tidak berlaku supaya tidak jadi tombol hantu. */
+    private function lupakanDraf(): void
+    {
+        $this->uploadId = null;
+        unset($this->uploadSaatIni, $this->entries, $this->riwayat);
+    }
+
     /** Target wire:poll selama upload berjalan. */
     public function refreshUpload(): void
     {
-        unset($this->upload, $this->entries, $this->riwayat);
+        unset($this->uploadSaatIni, $this->entries, $this->riwayat);
     }
 
     public function sedangBerjalan(): bool

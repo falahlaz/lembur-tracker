@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -68,25 +69,54 @@ class PostTimesheetUpload implements ShouldQueue
         return Cache::has(self::lockKey($user));
     }
 
+    /**
+     * Setiap jalan keluar lebih awal MENINGGALKAN JEJAK.
+     *
+     * Sebelumnya empat-empatnya `return;` telanjang: upload tertinggal di `queued`
+     * tanpa satu baris log pun, dan karena `tries = 1` tidak ada `failed_jobs`
+     * maupun callback failed() yang menyebutkannya. Halaman uploadnya lalu terkunci
+     * selamanya. Pemulihan otomatisnya sekarang ada di UploadRecovery, dan log di
+     * sini yang menjelaskan KENAPA.
+     */
     public function handle(UploadPoster $poster): void
     {
         // Upload milik orang lain tidak pernah dikerjakan, meskipun job-nya
         // entah bagaimana sampai ke sini.
         if ($this->upload->user_id !== $this->user->id) {
+            Log::warning('Upload timesheet dilewati: bukan milik user pada job.', [
+                'upload_id' => $this->upload->id,
+                'user_id' => $this->user->id,
+            ]);
+
             return;
         }
 
         if (! $this->user->hasKimaiConnection()) {
+            // Ditutup, bukan dibiarkan: token yang dicabut di antara pratinjau dan
+            // pengiriman tidak akan pernah kembali sendiri, jadi menunggu TTL basi
+            // hanya menahan halaman tanpa alasan.
+            Cache::forget(self::pendingKey($this->user));
+            $this->tutupPaksa('API key Kimai sudah tidak terpasang, jadi upload ini tidak bisa dijalankan.');
+
+            Log::warning('Upload timesheet dihentikan: koneksi Kimai tidak ada.', [
+                'upload_id' => $this->upload->id,
+                'user_id' => $this->user->id,
+            ]);
+
             return;
         }
 
         $upload = $this->upload->fresh();
 
         if ($upload === null || $upload->status !== UploadStatus::Queued) {
+            Log::warning('Upload timesheet dilewati: statusnya bukan queued lagi.', [
+                'upload_id' => $this->upload->id,
+                'user_id' => $this->user->id,
+                'status' => $upload?->status->value,
+            ]);
+
             return;
         }
-
-        Cache::forget(self::pendingKey($this->user));
 
         $lock = Cache::lock(self::lockKey($this->user), (int) config('kimai.lock_ttl'));
 
@@ -94,8 +124,21 @@ class PostTimesheetUpload implements ShouldQueue
         // tidak dipakai karena tanpa ShouldBeUnique ia memang tidak berefek apa-apa
         // — persis seperti di SyncKimaiTimesheets.
         if (! $lock->get()) {
+            // Sengaja TIDAK release(): tries = 1 membuat percobaan kedua langsung
+            // hangus, jadi release() hanya menukar satu jalur diam dengan jalur
+            // diam yang lain. Yang memulihkannya UploadRecovery::failStaleUploads().
+            Log::warning('Upload timesheet dilewati: kunci per-user sedang dipegang.', [
+                'upload_id' => $upload->id,
+                'user_id' => $this->user->id,
+            ]);
+
             return;
         }
+
+        // Baru dihapus SETELAH kunci didapat. Sebelumnya dihapus lebih dulu,
+        // sehingga job yang kalah rebutan kunci ikut membuang penanda milik job
+        // yang justru sedang berjalan.
+        Cache::forget(self::pendingKey($this->user));
 
         try {
             $poster->post($upload);
@@ -109,6 +152,12 @@ class PostTimesheetUpload implements ShouldQueue
     {
         Cache::forget(self::pendingKey($this->user));
 
+        $this->tutupPaksa('Upload berhenti di tengah jalan. Entri yang belum terkirim bisa dilanjutkan.');
+    }
+
+    /** Menutup upload dengan alasan yang bisa dibaca orang, kalau belum selesai. */
+    private function tutupPaksa(string $alasan): void
+    {
         $upload = $this->upload->fresh();
 
         if ($upload === null || $upload->status->isFinished()) {
@@ -117,7 +166,7 @@ class PostTimesheetUpload implements ShouldQueue
 
         $upload->forceFill([
             'status' => UploadStatus::Failed->value,
-            'error_message' => 'Upload berhenti di tengah jalan. Entri yang belum terkirim bisa dilanjutkan.',
+            'error_message' => $alasan,
             'finished_at' => now(),
         ])->save();
     }

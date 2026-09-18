@@ -3,7 +3,7 @@
     use App\Enums\UploadStatus;
     use App\Support\Format;
 
-    $upload = $this->upload();
+    $upload = $this->uploadSaatIni();
     $entries = $this->entries();
     $berjalan = $this->sedangBerjalan();
 @endphp
@@ -180,7 +180,7 @@
                     @if ($berjalan)
                         <x-filament::button disabled icon="heroicon-m-arrow-path">Mengirim…</x-filament::button>
                     @elseif ($pending->isNotEmpty())
-                        <x-filament::button wire:click="commit" icon="heroicon-m-paper-airplane">
+                        <x-filament::button type="button" wire:click="kirim" icon="heroicon-m-paper-airplane">
                             {{ $upload->status->isResumable() ? 'Lanjutkan' : 'Kirim' }} {{ $pending->count() }} entri ke Kimai
                         </x-filament::button>
                     @endif
@@ -191,8 +191,15 @@
                         </x-filament::button>
                     @endif
 
-                    @if (! $berjalan && $upload->status === UploadStatus::Draft)
-                        <x-filament::button type="button" color="gray" wire:click="batalkan">Batalkan</x-filament::button>
+                    {{-- Dulu syaratnya `! $berjalan && status === Draft`, dan itu berarti
+                         upload yang nyangkut di `queued` tidak punya tombol apa pun:
+                         Kirim mati karena $berjalan, Batalkan hilang karena statusnya
+                         bukan Draft. Sekarang selalu ada jalan keluar; yang benar-benar
+                         sedang berjalan ditolak di batalkan() dengan notifikasi. --}}
+                    @if (! in_array($upload->status, [UploadStatus::Success, UploadStatus::Cancelled], true))
+                        <x-filament::button type="button" color="gray" wire:click="batalkan">
+                            {{ $upload->status === UploadStatus::Draft ? 'Batalkan' : 'Buang pratinjau ini' }}
+                        </x-filament::button>
                     @endif
                 </div>
 

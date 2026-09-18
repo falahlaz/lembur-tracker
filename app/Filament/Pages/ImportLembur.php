@@ -104,10 +104,21 @@ class ImportLembur extends Page implements HasSchemas
             ->send();
     }
 
-    /** Langkah 2 — menyimpan hanya baris yang lolos. */
-    public function commit(): void
+    /**
+     * Langkah 2 — menyimpan hanya baris yang lolos.
+     *
+     * NAMANYA PENTING, dan bukan `commit()`: Livewire memesan nama itu di objek
+     * `$wire` (`aliases` di `livewire.esm.js`), sehingga `wire:click="commit"`
+     * memanggil sinkronisasi state bawaan Livewire dan TIDAK PERNAH sampai ke
+     * method ini. Penjelasan lengkapnya ada di UploadTimesheet::kirim();
+     * penjaganya LivewireNamingTest.
+     */
+    public function simpan(): void
     {
         if ($this->preview === null) {
+            Notification::make()->warning()->title('Belum ada pratinjau')
+                ->body('Periksa berkasnya dulu, lalu simpan.')->send();
+
             return;
         }
 

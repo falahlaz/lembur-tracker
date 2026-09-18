@@ -108,7 +108,7 @@
 
                 @if ($valid->isNotEmpty())
                     <div class="mt-6">
-                        <x-filament::button wire:click="commit" icon="heroicon-m-check">
+                        <x-filament::button type="button" wire:click="simpan" icon="heroicon-m-check">
                             Simpan {{ $valid->count() }} lembur
                         </x-filament::button>
                     </div>
