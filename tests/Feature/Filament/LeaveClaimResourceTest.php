@@ -2,15 +2,19 @@
 
 namespace Tests\Feature\Filament;
 
+use App\Domain\Lembur\LeaveTimesheetSync;
 use App\Enums\BalanceStatus;
 use App\Enums\ClaimStatus;
 use App\Enums\ClaimType;
+use App\Enums\LeaveTimesheetStatus;
 use App\Filament\Resources\LeaveClaims\Pages\CreateLeaveClaim;
 use App\Filament\Resources\LeaveClaims\Pages\EditLeaveClaim;
+use App\Filament\Resources\LeaveClaims\Pages\ListLeaveClaims;
 use App\Filament\Resources\LeaveClaims\Tables\LeaveClaimsTable;
 use App\Models\LeaveBalance;
 use App\Models\LeaveClaim;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Livewire\Livewire;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
@@ -157,6 +161,81 @@ class LeaveClaimResourceTest extends TestCase
     }
 
     #[Test]
+    public function ct_04_mengajukan_klaim_lewat_halaman_membuat_timesheet_cuti(): void
+    {
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+        $this->logOvertime($user, '2026-03-12', '09:00', '19:00');   // 8 jam
+        $this->kimaiActivities[] = ['id' => 41, 'name' => '00_ANNUAL_LEAVE', 'project' => null];
+        $this->fakeKimai([]);
+
+        Livewire::test(CreateLeaveClaim::class)
+            ->fillForm([
+                'claim_type' => ClaimType::FullDay->value,
+                'claim_date' => '2026-04-01',
+                'status' => ClaimStatus::Submitted->value,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors()
+            ->assertNotified();
+
+        $claim = LeaveClaim::query()->sole();
+
+        $this->assertCount(5, $this->kimaiPostBodies());
+        $this->assertSame(
+            5,
+            $claim->timesheets()->where('status', LeaveTimesheetStatus::Posted->value)->count(),
+        );
+    }
+
+    #[Test]
+    public function ct_04_membatalkan_klaim_lewat_halaman_menghapus_timesheet_cuti(): void
+    {
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+        $this->logOvertime($user, '2026-03-12', '09:00', '19:00');
+        $this->kimaiActivities[] = ['id' => 41, 'name' => '00_ANNUAL_LEAVE', 'project' => null];
+        $this->fakeKimai([]);
+
+        $claim = $this->submitClaim($user, '2026-04-01', ClaimType::FullDay);
+        app(LeaveTimesheetSync::class)->sync($claim);
+
+        Livewire::test(EditLeaveClaim::class, ['record' => $claim->getKey()])
+            ->fillForm(['status' => ClaimStatus::Cancelled->value])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertCount(5, $this->kimaiDeletedIds());
+        $this->assertSame(
+            5,
+            $claim->timesheets()->where('status', LeaveTimesheetStatus::Deleted->value)->count(),
+        );
+    }
+
+    #[Test]
+    public function ct_04_klaim_tanpa_koneksi_kimai_tetap_tersimpan_tanpa_menyentuh_jaringan(): void
+    {
+        // employee() sengaja tidak punya token: fitur cuti-ke-Kimai tidak boleh
+        // mengubah apa pun bagi tim yang tidak memakai Kimai.
+        $user = $this->employee();
+        $this->actingAs($user);
+        $this->logOvertime($user, '2026-03-12', '09:00', '19:00');
+        $this->fakeKimai([]);
+
+        Livewire::test(CreateLeaveClaim::class)
+            ->fillForm([
+                'claim_type' => ClaimType::FullDay->value,
+                'claim_date' => '2026-04-01',
+                'status' => ClaimStatus::Submitted->value,
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        Http::assertNothingSent();
+        $this->assertSame(0, LeaveClaim::query()->sole()->timesheets()->count());
+    }
+
+    #[Test]
     public function teks_email_memuat_tiga_hal_wajib_sop(): void
     {
         $user = $this->employee();
@@ -181,7 +260,7 @@ class LeaveClaimResourceTest extends TestCase
 
         $this->actingAs($saya);
 
-        Livewire::test(\App\Filament\Resources\LeaveClaims\Pages\ListLeaveClaims::class)
+        Livewire::test(ListLeaveClaims::class)
             ->assertCanNotSeeTableRecords([$klaimOrangLain]);
     }
 }

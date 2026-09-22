@@ -119,6 +119,38 @@ class KimaiClient
     }
 
     /**
+     * Menghapus satu entri timesheet.
+     *
+     * 404 DIANGGAP BERHASIL, dan itu bukan kelonggaran: keadaan akhir yang
+     * diinginkan — entri itu tidak ada lagi di Kimai — sudah terpenuhi. Kalau 404
+     * diperlakukan sebagai kegagalan, satu entri yang kebetulan sudah dihapus
+     * manual lewat UI Kimai akan menahan barisnya selamanya, dan tombol "kirim
+     * ulang" tidak akan pernah bisa menuntaskan apa pun.
+     *
+     * Pemeriksaannya ada DI SINI, bukan di dalam guard(): guard() juga dipakai GET
+     * dan POST, dan di sana 404 berarti base URL-nya yang salah — persis yang
+     * dikatakan KimaiRejectedRequest::userMessage(). Melonggarkannya secara global
+     * akan membuat instance yang salah alamat terlihat sehat.
+     */
+    public function deleteTimesheet(string $token, int $id): void
+    {
+        $path = "/api/timesheets/{$id}";
+
+        try {
+            $response = $this->request($token)->delete($path);
+        } catch (ConnectionException) {
+            throw new KimaiUnavailable('Kimai tidak dapat dihubungi.');
+        }
+
+        if ($response->status() === 404) {
+            return;
+        }
+
+        // Kimai membalas 204 saat berhasil; successful() sudah menerimanya.
+        $this->guard($response, $path);
+    }
+
+    /**
      * Daftar project untuk dipilih user.
      *
      * `ignoreDates=1` bukan hiasan: tanpa itu Kimai menyembunyikan project yang

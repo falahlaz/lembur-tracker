@@ -191,6 +191,10 @@ tanpa merender satu pun halaman.
 | `BalanceMaintenance` | §9.3 — job harian |
 | `ReminderDispatcher` | F-07 — reminder, anti-kirim-ganda |
 | `HistoricalImporter` | OQ-4 — impor lembur historis |
+| `LeaveDayPlanner` | CT-03 — menit cuti jadi slot jam, dari `minutes_required` bukan dari bentuk klaim |
+| `LeaveSlot` | CT-03 — satu potong jam cuti, selalu di-anchor di zona Kimai |
+| `LeaveTimesheetSync` | CT-04 — klaim yang diajukan menulis entri `00_ANNUAL_LEAVE` ke Kimai, dan menariknya kembali saat dibatalkan |
+| `LeaveTimesheetResult` | CT-04 — hasil pengiriman, sudah berupa kalimat siap tampil |
 
 Upload timesheet ke Kimai hidup di `app/Domain/Timesheet/`:
 
@@ -221,6 +225,12 @@ Sinkronisasi Kimai hidup terpisah di `app/Domain/Kimai/`:
 | `KimaiConnection` | F-11 — simpan/tes/hapus API key |
 | `KimaiCatalogSync` | LG-01 — tarik seluruh project & activity ke cermin lokal (manual, tanpa scheduler) |
 | `KimaiCatalogMirror` | LG-02 — sisi baca cermin, berbentuk sama dengan keluaran KimaiClient |
+
+Cuti pengganti yang diajukan otomatis tercatat sebagai timesheet di Kimai (CT-04).
+Setengah hari mengisi 09:00–11:00, 11:00–12:00, dan 13:00–14:00; sehari penuh
+melanjutkannya sampai 18:00. Jam istirahat 12:00–13:00 tidak pernah ikut, dan entri
+cuti **tidak pernah bertag** — entri bertag `Overtime` justru yang ditarik kembali
+oleh sync menjadi catatan lembur.
 
 ### Enam hal yang paling mudah salah
 

@@ -4,6 +4,8 @@ namespace App\Filament\Resources\LeaveClaims\Pages;
 
 use App\Domain\Lembur\ClaimValidator;
 use App\Domain\Lembur\LeaveAllocator;
+use App\Domain\Lembur\LeaveTimesheetResult;
+use App\Domain\Lembur\LeaveTimesheetSync;
 use App\Enums\ClaimStatus;
 use App\Enums\ClaimType;
 use App\Filament\Resources\LeaveClaims\LeaveClaimResource;
@@ -47,7 +49,20 @@ class CreateLeaveClaim extends CreateRecord
         return $data;
     }
 
-    /** BR-20 — saldo ditahan begitu klaim mencapai status "diajukan". */
+    /**
+     * CT-04 — hasil pengiriman ke Kimai, ditahan di sini supaya notifikasinya
+     * bisa mengatakan apa yang BENAR-BENAR terjadi, bukan sekadar "tersimpan".
+     */
+    protected ?LeaveTimesheetResult $kimai = null;
+
+    /**
+     * BR-20 — saldo ditahan begitu klaim mencapai status "diajukan".
+     *
+     * CT-04 menempel di sini, sejajar dengan hold(), bukan lewat observer model:
+     * menahan saldo dan menulis timesheet adalah dua akibat dari keputusan yang
+     * sama, dan `LeaveClaim::saved` juga menyala dari perintah harian dan dari
+     * rekonsiliasi saldo — tempat yang tidak boleh mengirim apa pun ke Kimai.
+     */
     protected function afterCreate(): void
     {
         /** @var LeaveClaim $claim */
@@ -56,6 +71,8 @@ class CreateLeaveClaim extends CreateRecord
         if ($claim->status->holdsBalance()) {
             app(LeaveAllocator::class)->hold($claim);
         }
+
+        $this->kimai = app(LeaveTimesheetSync::class)->sync($claim);
     }
 
     protected function getCreatedNotification(): ?Notification
@@ -63,18 +80,23 @@ class CreateLeaveClaim extends CreateRecord
         /** @var LeaveClaim $claim */
         $claim = $this->getRecord()->refresh();
 
+        $saldo = $claim->status->holdsBalance()
+            ? Format::durasi($claim->minutes_required).' saldo sudah ditahan untuk klaim ini.'
+            : 'Masih berstatus draft — saldo belum ditahan.';
+
+        $kimai = $this->kimai?->pesan();
+
         return Notification::make()
-            ->success()
+            ->status($this->kimai !== null && ! $this->kimai->isClean() ? 'warning' : 'success')
             ->title('Klaim '.Format::tanggalRingkas($claim->claim_date).' tersimpan')
-            ->body($claim->status->holdsBalance()
-                ? Format::durasi($claim->minutes_required).' saldo sudah ditahan untuk klaim ini.'
-                : 'Masih berstatus draft — saldo belum ditahan.');
+            ->body(trim($saldo.' '.(string) $kimai));
     }
 
     protected function getRedirectUrl(): string
     {
         return $this->getResource()::getUrl('index');
     }
+
     /** Status bisa tiba sebagai enum atau string, tergantung jalur pengisian form. */
     protected static function statusOf(array $data): ?ClaimStatus
     {
@@ -82,5 +104,4 @@ class CreateLeaveClaim extends CreateRecord
 
         return $status instanceof ClaimStatus ? $status : ClaimStatus::tryFrom((string) $status);
     }
-
 }

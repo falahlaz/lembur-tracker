@@ -61,6 +61,22 @@ class ActivityResolver
     }
 
     /**
+     * Id activity yang cocok dengan SATU nama.
+     *
+     * Kosong berarti tidak ketemu, lebih dari satu berarti ambigu — pemanggil
+     * yang memutuskan bagaimana melaporkannya. Dipisah dari resolve() supaya
+     * pemakai di luar workbook, seperti activity cuti pengganti, memakai tiga
+     * tingkat pencocokan yang SAMA alih-alih salinan yang bisa berbeda diam-diam.
+     *
+     * @param  array<int, array{id: int, name: string, project: ?int}>  $activities
+     * @return array<int, int>
+     */
+    public function idsFor(array $activities, string $name): array
+    {
+        return $this->lookup($this->index($activities), $name);
+    }
+
+    /**
      * Tiga tingkat kunci untuk satu activity: apa adanya, huruf kecil, dan
      * dinormalkan. Nilainya daftar id, supaya nama yang ambigu ketahuan alih-alih
      * saling menimpa diam-diam.
