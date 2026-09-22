@@ -235,6 +235,13 @@ abstract class TestCase extends BaseTestCase
                     return $this->respondToKimaiPost($request->data());
                 }
 
+                // Alasan yang sama untuk DELETE: glob di atas ikut mencocokkan
+                // /api/timesheets/900001, dan tanpa cabang ini penghapusan akan
+                // dijawab daftar entri lalu terlihat berhasil tanpa pernah terjadi.
+                if ($request->method() === 'DELETE') {
+                    return $this->respondToKimaiDelete($request->url());
+                }
+
                 if ($this->kimaiGetStatus !== null) {
                     return Http::response('', $this->kimaiGetStatus);
                 }
@@ -338,10 +345,49 @@ abstract class TestCase extends BaseTestCase
     /** @var (\Closure(array<string, mixed>, int): (Response|PromiseInterface|null))|null */
     protected ?\Closure $kimaiPostHandler = null;
 
+    /** @var array<int, int> id yang DELETE-nya tertangkap, berurutan */
+    protected array $kimaiDeletes = [];
+
+    /** @var (\Closure(int, int): (Response|PromiseInterface|null))|null */
+    protected ?\Closure $kimaiDeleteHandler = null;
+
     /** @return array<int, array<string, mixed>> */
     protected function kimaiPostBodies(): array
     {
         return $this->kimaiPosts;
+    }
+
+    /** @return array<int, int> */
+    protected function kimaiDeletedIds(): array
+    {
+        return $this->kimaiDeletes;
+    }
+
+    /** Membuat DELETE ke-$n gagal — 404 harus dianggap selesai, 5xx harus bisa diulang. */
+    protected function failKimaiDeleteAt(int $n, int $status): void
+    {
+        $this->kimaiDeleteHandler = fn (int $id, int $urutan) => $urutan === $n
+            ? Http::response('', $status)
+            : null;
+    }
+
+    /** @return Response|PromiseInterface */
+    private function respondToKimaiDelete(string $url)
+    {
+        $id = (int) basename((string) parse_url($url, PHP_URL_PATH));
+
+        $this->kimaiDeletes[] = $id;
+
+        if ($this->kimaiDeleteHandler !== null) {
+            $paksa = ($this->kimaiDeleteHandler)($id, count($this->kimaiDeletes));
+
+            if ($paksa !== null) {
+                return $paksa;
+            }
+        }
+
+        // Kimai membalas 204 tanpa badan.
+        return Http::response('', 204);
     }
 
     /**

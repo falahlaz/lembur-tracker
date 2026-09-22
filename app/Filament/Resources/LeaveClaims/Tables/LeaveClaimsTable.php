@@ -2,13 +2,16 @@
 
 namespace App\Filament\Resources\LeaveClaims\Tables;
 
+use App\Domain\Lembur\LeaveTimesheetSync;
 use App\Enums\ClaimStatus;
 use App\Enums\ClaimType;
+use App\Enums\LeaveTimesheetStatus;
 use App\Models\LeaveClaim;
 use App\Support\Format;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Textarea;
+use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
@@ -56,6 +59,16 @@ class LeaveClaimsTable
                         : null)
                     ->description(fn (LeaveClaim $c) => $c->needs_review ? 'Perlu ditinjau' : null),
 
+                // CT-04 — status timesheet cuti di Kimai. Toggleable supaya tabel
+                // tetap ringkas bagi tim yang tidak memakai Kimai sama sekali.
+                TextColumn::make('kimai')
+                    ->label('Kimai')
+                    ->badge()
+                    ->state(fn (LeaveClaim $c) => static::kimaiState($c))
+                    ->color(fn (LeaveClaim $c) => static::kimaiColor($c))
+                    ->placeholder('—')
+                    ->toggleable(),
+
                 TextColumn::make('submitted_at')
                     ->label('Diajukan')
                     ->dateTime('j M Y, H:i')
@@ -91,11 +104,62 @@ class LeaveClaimsTable
                             ->helperText('Klik teksnya untuk memilih semua.'),
                     ]),
 
+                // Tanpa ini, klaim yang gagal terkirim karena VPN mati tidak punya
+                // jalan keluar selain diedit ulang tanpa mengubah apa pun.
+                Action::make('kirimUlangKimai')
+                    ->label('Kirim ulang ke Kimai')
+                    ->icon('heroicon-m-arrow-path')
+                    ->color('gray')
+                    ->visible(fn (LeaveClaim $record) => static::adaYangTertunda($record))
+                    ->action(function (LeaveClaim $record) {
+                        $result = app(LeaveTimesheetSync::class)->sync($record);
+
+                        Notification::make()
+                            ->status($result->isClean() ? 'success' : 'warning')
+                            ->title($result->isClean() ? 'Timesheet cuti terkirim' : 'Masih ada yang tertinggal')
+                            ->body($result->pesan() ?? 'Tidak ada yang perlu dikirim.')
+                            ->send();
+                    }),
+
                 EditAction::make(),
             ])
             ->emptyStateHeading('Belum ada klaim')
             ->emptyStateDescription('Kalau punya saldo aktif, kamu bisa ajukan libur pengganti dari sini.')
             ->emptyStateIcon('heroicon-o-calendar-days');
+    }
+
+    /** "5 slot" / "2 dari 5" / "belum dibuat" — null berarti klaim ini memang tidak memakai Kimai. */
+    protected static function kimaiState(LeaveClaim $claim): ?string
+    {
+        $total = $claim->timesheets()->kept()->count();
+
+        if ($total === 0) {
+            return $claim->status->isActive() && ($claim->user?->hasKimaiConnection() ?? false)
+                ? 'Belum dibuat'
+                : null;
+        }
+
+        $terkirim = $claim->timesheets()->kept()->where('status', LeaveTimesheetStatus::Posted->value)->count();
+
+        return $terkirim === $total ? "{$total} slot" : "{$terkirim} dari {$total} slot";
+    }
+
+    protected static function kimaiColor(LeaveClaim $claim): string
+    {
+        return static::adaYangTertunda($claim) ? 'warning' : 'success';
+    }
+
+    /** Ada slot yang belum benar-benar beres di Kimai — terkirim maupun terhapus. */
+    protected static function adaYangTertunda(LeaveClaim $claim): bool
+    {
+        return $claim->timesheets()
+            ->where(fn ($q) => $q
+                ->whereIn('status', [
+                    LeaveTimesheetStatus::Pending->value,
+                    LeaveTimesheetStatus::Failed->value,
+                ])
+                ->orWhereNotNull('discarded_at'))
+            ->exists();
     }
 
     /** SOP §9.2 mewajibkan tiga hal: tanggal overtime, total jam, dan evidence. */

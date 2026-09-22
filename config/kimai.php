@@ -107,6 +107,32 @@ return [
     'default_project' => (int) env('KIMAI_DEFAULT_PROJECT', 105),
 
     /*
+    |--------------------------------------------------------------------------
+    | Timesheet cuti pengganti
+    |--------------------------------------------------------------------------
+    |
+    | CT-04 — klaim cuti yang diajukan otomatis menulis entri cuti ke Kimai.
+    | Nama activity-nya di config, bukan di kode, dengan alasan yang sama seperti
+    | `tags` (OQ-3): kalau suatu saat instance-nya memakai "00_LEAVE", yang diubah
+    | nilainya — bukan kelasnya.
+    |
+    | Project-nya mengikuti `default_project` kecuali disetel sendiri, karena
+    | project id Kimai BERGANTI setiap tahun dan memisahkan keduanya berarti ada
+    | dua tempat yang harus diingat tiap Januari.
+    |
+    */
+
+    'leave_activity' => env('KIMAI_LEAVE_ACTIVITY', '00_ANNUAL_LEAVE'),
+
+    // `?:` bukan `??`: baris kosong di .env terbaca sebagai string kosong, bukan
+    // null, sehingga default lewat argumen kedua env() tidak pernah kebagian.
+    'leave_project' => (int) (env('KIMAI_LEAVE_PROJECT') ?: env('KIMAI_DEFAULT_PROJECT', 105)),
+
+    /* Kimai mewajibkan `description` terisi; ini teks yang terbaca di sana. */
+
+    'leave_description' => env('KIMAI_LEAVE_DESCRIPTION', 'Cuti pengganti'),
+
+    /*
     | Pagar keras: berkas yang salah bentuk tidak boleh berubah menjadi ribuan
     | POST ke instance yang dipakai seluruh tim.
     */

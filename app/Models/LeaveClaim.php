@@ -4,21 +4,24 @@ namespace App\Models;
 
 use App\Enums\ClaimStatus;
 use App\Enums\ClaimType;
+use App\Observers\LeaveClaimObserver;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Spatie\Activitylog\Support\LogOptions;
 use Spatie\Activitylog\Models\Concerns\LogsActivity;
+use Spatie\Activitylog\Support\LogOptions;
 
 #[Fillable([
     'user_id', 'claim_date', 'claim_type', 'arrival_time',
     'minutes_required', 'quota_weight', 'status', 'needs_review',
     'submitted_at', 'notes',
 ])]
+#[ObservedBy(LeaveClaimObserver::class)]
 class LeaveClaim extends Model
 {
     use HasFactory, LogsActivity, SoftDeletes;
@@ -56,6 +59,12 @@ class LeaveClaim extends Model
     public function allocations(): HasMany
     {
         return $this->hasMany(LeaveClaimAllocation::class);
+    }
+
+    /** CT-01 — slot jam cuti yang ditulis ke Kimai untuk klaim ini. */
+    public function timesheets(): HasMany
+    {
+        return $this->hasMany(LeaveClaimTimesheet::class);
     }
 
     public function scopeActive(Builder $query): Builder

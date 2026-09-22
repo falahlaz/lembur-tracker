@@ -4,6 +4,8 @@ namespace App\Filament\Resources\LeaveClaims\Pages;
 
 use App\Domain\Lembur\ClaimValidator;
 use App\Domain\Lembur\LeaveAllocator;
+use App\Domain\Lembur\LeaveTimesheetResult;
+use App\Domain\Lembur\LeaveTimesheetSync;
 use App\Enums\ClaimStatus;
 use App\Enums\ClaimType;
 use App\Filament\Resources\LeaveClaims\LeaveClaimResource;
@@ -47,6 +49,9 @@ class EditLeaveClaim extends EditRecord
      * nol agar perubahan tanggal atau bentuk klaim tidak meninggalkan hold basi
      * yang menyandera saldo tanpa ada klaim yang memakainya.
      */
+    /** CT-04 — lihat catatan di CreateLeaveClaim. */
+    protected ?LeaveTimesheetResult $kimai = null;
+
     protected function afterSave(): void
     {
         /** @var LeaveClaim $claim */
@@ -55,11 +60,7 @@ class EditLeaveClaim extends EditRecord
 
         if ($claim->status->holdsBalance()) {
             $allocator->hold($claim);
-
-            return;
-        }
-
-        if ($claim->status->releasesBalance() || $claim->status === ClaimStatus::Draft) {
+        } elseif ($claim->status->releasesBalance() || $claim->status === ClaimStatus::Draft) {
             $allocator->release($claim);
 
             // Klaim yang dibatalkan tidak lagi perlu ditinjau (BR-23 selesai).
@@ -67,6 +68,11 @@ class EditLeaveClaim extends EditRecord
                 $claim->update(['needs_review' => false]);
             }
         }
+
+        // CT-04 dijalankan untuk SEMUA cabang, termasuk yang tadinya `return`
+        // lebih awal: klaim yang dibatalkan justru yang entrinya harus ditarik
+        // kembali dari Kimai.
+        $this->kimai = app(LeaveTimesheetSync::class)->sync($claim);
     }
 
     protected function getSavedNotification(): ?Notification
@@ -74,15 +80,18 @@ class EditLeaveClaim extends EditRecord
         /** @var LeaveClaim $claim */
         $claim = $this->getRecord()->refresh();
 
+        $saldo = match (true) {
+            $claim->status->holdsBalance() => 'Saldo tetap ditahan untuk klaim ini.',
+            $claim->status->releasesBalance() => 'Saldo dikembalikan ke batch asalnya, tanggal hangusnya tidak berubah.',
+            default => 'Status klaim diperbarui.',
+        };
+
         return Notification::make()
-            ->success()
+            ->status($this->kimai !== null && ! $this->kimai->isClean() ? 'warning' : 'success')
             ->title('Klaim diperbarui')
-            ->body(match (true) {
-                $claim->status->holdsBalance() => 'Saldo tetap ditahan untuk klaim ini.',
-                $claim->status->releasesBalance() => 'Saldo dikembalikan ke batch asalnya, tanggal hangusnya tidak berubah.',
-                default => 'Status klaim diperbarui.',
-            });
+            ->body(trim($saldo.' '.(string) $this->kimai?->pesan()));
     }
+
     /** Status bisa tiba sebagai enum atau string, tergantung jalur pengisian form. */
     protected static function statusOf(array $data): ?ClaimStatus
     {
@@ -90,5 +99,4 @@ class EditLeaveClaim extends EditRecord
 
         return $status instanceof ClaimStatus ? $status : ClaimStatus::tryFrom((string) $status);
     }
-
 }
