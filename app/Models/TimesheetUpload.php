@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /** Satu upload workbook timesheet, dari pratinjau sampai hasil kirimnya. */
 #[Fillable([
-    'user_id', 'original_filename', 'file_hash', 'customer_id', 'project_id',
+    'user_id', 'source', 'original_filename', 'file_hash', 'customer_id', 'project_id',
     'status', 'range_start', 'range_end', 'count_parsed', 'duplicates_checked', 'issues',
 ])]
 class TimesheetUpload extends Model
@@ -22,6 +22,12 @@ class TimesheetUpload extends Model
 
     /** Riwayat menyimpan 20 upload terakhir per user, seperti SyncRun::KEEP_PER_USER. */
     public const KEEP_PER_USER = 20;
+
+    /** Entri dibaca dari workbook di halaman Upload Timesheet. */
+    public const SOURCE_WORKBOOK = 'workbook';
+
+    /** Entri diketik di halaman Isi Timesheet. */
+    public const SOURCE_FORM = 'form';
 
     protected function casts(): array
     {
@@ -82,6 +88,11 @@ class TimesheetUpload extends Model
                 ->whereHas('entries', fn ($q) => $q->where('status', UploadEntryStatus::Pending->value))
             )
         );
+    }
+
+    public function scopeFromSource(Builder $query, string $source): Builder
+    {
+        return $query->where('source', $source);
     }
 
     public function isActive(): bool
