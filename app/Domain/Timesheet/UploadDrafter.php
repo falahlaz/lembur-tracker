@@ -3,6 +3,7 @@
 namespace App\Domain\Timesheet;
 
 use App\Domain\Kimai\Exceptions\KimaiException;
+use App\Domain\Timesheet\Exceptions\InvalidManualInput;
 use App\Domain\Timesheet\Exceptions\InvalidWorkbook;
 use App\Enums\UploadEntryStatus;
 use App\Enums\UploadStatus;
@@ -30,6 +31,7 @@ class UploadDrafter
         private readonly DuplicateDetector $duplicates,
         private readonly KimaiCatalog $catalog,
         private readonly ActivityResolver $activities,
+        private readonly ManualEntryBuilder $builder,
     ) {}
 
     /** @throws InvalidWorkbook */
@@ -65,9 +67,83 @@ class UploadDrafter
         // ketemu sudah tidak layak kirim, jadi tidak perlu ikut dibandingkan.
         $issuesActivity = $this->resolveActivities($user, $book->entries, $projectId);
 
+        return $this->draftFromBook(
+            $user,
+            $book,
+            $originalName,
+            @hash_file('sha256', $path) ?: null,
+            TimesheetUpload::SOURCE_WORKBOOK,
+            $projectId,
+            $issuesActivity,
+        );
+    }
+
+    /**
+     * Jalur halaman Isi Timesheet: baris form, bukan berkas.
+     *
+     * Activity dipilih langsung sebagai id dari katalog, jadi tidak ada nama yang
+     * perlu diresolusi — yang tersisa hanya memastikan id itu memang berlaku di
+     * project terpilih, supaya kesalahan terlihat di pratinjau, bukan sebagai
+     * penolakan Kimai satu per satu.
+     *
+     * @param  array<int|string, array<string, mixed>>  $rows
+     *
+     * @throws InvalidManualInput
+     */
+    public function draftManual(User $user, array $rows, int $projectId): TimesheetUpload
+    {
+        $katalog = $this->catalog->activitiesOrMirror($user, $projectId);
+
+        $nama = [];
+
+        foreach ($katalog->items as $activity) {
+            $nama[(int) $activity['id']] = (string) $activity['name'];
+        }
+
+        $book = $this->builder->build($rows, $projectId, $nama);
+
+        $issues = [];
+
+        if ($katalog->tersedia()) {
+            foreach ($book->entries as $entry) {
+                if (! isset($nama[(int) $entry->activityId])) {
+                    $entry->skip('Activity ini tidak berlaku di project terpilih.');
+                }
+            }
+        } else {
+            $issues[] = 'Daftar activity tidak bisa diambil dari Kimai, jadi activity-nya belum bisa dipastikan: '
+                .$katalog->error;
+        }
+
+        $mulai = $book->rangeStart();
+        $akhir = $book->entries === [] ? null : max(array_map(fn (ParsedEntry $e) => $e->workDate, $book->entries));
+
+        $label = 'Isian manual · '.($mulai === null ? '' : (
+            $mulai->isSameDay($akhir)
+                ? $mulai->translatedFormat('j M Y')
+                : $mulai->translatedFormat('j M').' – '.$akhir->translatedFormat('j M Y')
+        ));
+
+        return $this->draftFromBook($user, $book, $label, null, TimesheetUpload::SOURCE_FORM, $projectId, $issues);
+    }
+
+    /**
+     * Bagian bersama kedua jalur: pemeriksaan duplikat lalu penyimpanan draf.
+     *
+     * @param  array<int, string>  $extraIssues
+     */
+    private function draftFromBook(
+        User $user,
+        ParsedWorkbook $book,
+        string $label,
+        ?string $hash,
+        string $source,
+        int $projectId,
+        array $extraIssues = [],
+    ): TimesheetUpload {
         $check = $this->duplicates->mark($user, $book);
 
-        return DB::transaction(function () use ($user, $book, $check, $originalName, $path, $projectId, $issuesActivity) {
+        return DB::transaction(function () use ($user, $book, $check, $label, $hash, $source, $projectId, $extraIssues) {
             // Satu draf per orang. Draf lama yang ditinggalkan dibatalkan, bukan
             // dihapus — supaya riwayatnya tetap jujur.
             TimesheetUpload::query()
@@ -75,7 +151,7 @@ class UploadDrafter
                 ->draft()
                 ->update(['status' => UploadStatus::Cancelled->value]);
 
-            $issues = array_merge($book->issues, $issuesActivity);
+            $issues = array_merge($book->issues, $extraIssues);
 
             if (! $check->checked) {
                 $issues[] = 'Duplikat tidak bisa diperiksa: '.$check->unavailableReason;
@@ -83,8 +159,9 @@ class UploadDrafter
 
             $upload = TimesheetUpload::create([
                 'user_id' => $user->id,
-                'original_filename' => $originalName,
-                'file_hash' => @hash_file('sha256', $path) ?: null,
+                'source' => $source,
+                'original_filename' => $label,
+                'file_hash' => $hash,
                 'customer_id' => $book->customerId,
                 'project_id' => $projectId,
                 'status' => UploadStatus::Draft->value,

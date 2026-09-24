@@ -47,6 +47,15 @@ upload berhenti di status "Menunggu" — halaman akan menutupnya sendiri sebagai
 gagal setelah `KIMAI_LOCK_TTL` (10 menit) dan menyebutkan worker-nya, tetapi tidak
 satu pun entri sampai ke Kimai.
 
+### Isi Timesheet
+
+Halaman **Isi Timesheet** (grup Pencatatan) mengisi Kimai langsung dari form, tanpa
+workbook. Tulis blok waktunya apa adanya (misalnya 09:00–18:00); setiap baris dipecah
+otomatis menjadi entri maksimal 2 jam karena Kimai menolak yang lebih panjang. Tombol
+"Salin ke rentang tanggal" menyalin baris satu hari ke banyak hari sekaligus. Setelah
+itu alurnya sama dengan Upload Timesheet: cek duplikat, pratinjau, lalu kirim lewat
+queue. Karena itu `queue:work` juga wajib jalan di sini.
+
 Perintah manual:
 
 ```bash
