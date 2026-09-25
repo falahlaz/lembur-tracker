@@ -6,6 +6,7 @@ use App\Enums\Role;
 use App\Models\User;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\TimePicker;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -61,8 +62,10 @@ class UserForm
                         ->required(fn (?User $record) => $record === null)
                         ->dehydrated(fn ($state) => filled($state))
                         ->helperText(fn (?User $record) => $record
-                            ? 'Kosongkan bila tidak ingin mengganti password.'
-                            : 'Minimal 8 karakter.'),
+                            ? 'Kosongkan bila tidak ingin mengganti password. Password baru bersifat '
+                                .'sementara: user diminta menggantinya saat login berikutnya.'
+                            : 'Minimal 8 karakter. Password ini sementara: user diminta '
+                                .'menggantinya saat login pertama.'),
 
                     Toggle::make('is_active')
                         ->label('Aktif')
@@ -78,7 +81,7 @@ class UserForm
                         ->label('Pembulatan durasi')
                         ->helperText('Default mati, sesuai BR-04. User bisa mengubahnya sendiri.'),
 
-                    \Filament\Forms\Components\TimePicker::make('default_late_arrival_time')
+                    TimePicker::make('default_late_arrival_time')
                         ->label('Jam masuk default (datang siang)')
                         ->seconds(false)
                         ->default('13:00'),

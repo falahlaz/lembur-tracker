@@ -6,7 +6,12 @@
     $catat = OvertimeRecordResource::getUrl('create');
     $cuti = CutiPengganti::getUrl();
     $path = request()->path();
+    // Selama password sementara belum diganti, semua tautan ini hanya memantul
+    // balik ke halaman ganti password.
+    $locked = \Filament\Facades\Filament::auth()->user()?->mustChangePassword() ?? false;
 @endphp
+
+@unless ($locked)
 
 {{-- Design Brief §7 — bottom bar hanya di layar kecil, dengan "Catat Lembur"
      di tengah dan menonjol: itulah alur terpenting di seluruh aplikasi, dan
@@ -49,3 +54,4 @@
 
 {{-- Ruang supaya konten terakhir tidak tertutup bar. --}}
 <div class="h-20 md:hidden" aria-hidden="true"></div>
+@endunless
