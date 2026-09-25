@@ -15,7 +15,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
 #[Fillable([
-    'name', 'email', 'password', 'role', 'manager_id', 'is_active',
+    'name', 'email', 'password', 'role', 'manager_id', 'is_active', 'must_change_password',
     'rounding_enabled', 'notification_prefs', 'default_late_arrival_time',
 ])]
 #[Hidden(['password', 'remember_token', 'kimai_api_token'])]
@@ -31,6 +31,7 @@ class User extends Authenticatable implements FilamentUser
             'password' => 'hashed',
             'role' => Role::class,
             'is_active' => 'boolean',
+            'must_change_password' => 'boolean',
             'rounding_enabled' => 'boolean',
             'notification_prefs' => 'array',
             // §9 — AES-256-CBC lewat APP_KEY. Tidak pernah disimpan plaintext.
@@ -45,6 +46,12 @@ class User extends Authenticatable implements FilamentUser
     public function canAccessPanel(Panel $panel): bool
     {
         return $this->is_active;
+    }
+
+    /** Password masih yang diberikan admin — harus diganti sebelum memakai panel. */
+    public function mustChangePassword(): bool
+    {
+        return (bool) $this->must_change_password;
     }
 
     public function isAdmin(): bool

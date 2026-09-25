@@ -2,13 +2,16 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Pages\Auth\EditProfile;
+use App\Filament\Pages\Auth\GantiPasswordAwal;
+use App\Filament\Pages\Dashboard;
+use App\Http\Middleware\EnsurePasswordIsChanged;
 use Filament\Enums\ThemeMode;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
 use Filament\Navigation\NavigationGroup;
-use App\Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
@@ -18,6 +21,7 @@ use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Route;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 
 class AppPanelProvider extends PanelProvider
@@ -29,6 +33,12 @@ class AppPanelProvider extends PanelProvider
             ->id('app')
             ->path('app')
             ->login()
+            // Nama + password saja; tanpa foto profil karena penyimpanan terbatas.
+            // Bukan layout simple supaya sidebar dan bottom bar tetap ada.
+            ->profile(EditProfile::class, isSimple: false)
+            // Password dari admin hanya sementara — lihat EnsurePasswordIsChanged.
+            ->authenticatedRoutes(fn () => Route::get('/ganti-password', GantiPasswordAwal::class)
+                ->name('auth.ganti-password'))
             ->brandName('LemburKu')
             ->colors([
                 'primary' => Color::Indigo,
@@ -81,6 +91,7 @@ class AppPanelProvider extends PanelProvider
             ])
             ->authMiddleware([
                 Authenticate::class,
+                EnsurePasswordIsChanged::class,
             ]);
     }
 }
