@@ -2,6 +2,7 @@
 # Semua layanan berbagi image aplikasi yang sama; yang membedakan hanya perintahnya.
 
 x-app: &app
+  image: falahlaz/lembur-tracker:main
   build:
     context: .
     target: runtime

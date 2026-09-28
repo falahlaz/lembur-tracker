@@ -63,52 +63,121 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # deploy:
-  #   name: Deploy
-  #   needs: image-build
-  #   runs-on: ubuntu-latest
-  #   if: github.ref == 'refs/heads/main'
+  deploy:
+    name: Deploy
+    needs: image-build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
 
-  #   steps:
-  #     - name: Checkout Repository
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-  #     - name: Ensure target directory exists
-  #       uses: appleboy/ssh-action@v1.2.0
-  #       with:
-  #         passphrase: ${{ secrets.SSH_PASSPHRASE }}
-  #         host: ${{ secrets.SSH_HOST }}
-  #         username: ${{ secrets.SSH_USER }}
-  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
-  #         script: mkdir -p /home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}
+      - name: Ensure target directory exists
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: mkdir -p /home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}
 
-  #     - name: Copy docker-compose.yml
-  #       uses: appleboy/scp-action@v0.1.7
-  #       with:
-  #         host: ${{ secrets.SSH_HOST }}
-  #         username: ${{ secrets.SSH_USER }}
-  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
-  #         passphrase: ${{ secrets.SSH_PASSPHRASE }}
-  #         source: "docker-compose.yml"
-  #         target: "/home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}"
+      - name: Copy docker-compose.yml
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          source: "docker-compose.yml"
+          target: "/home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}"
 
-  #     - name: Deploy
-  #       uses: appleboy/ssh-action@v1.2.0
-  #       with:
-  #         host: ${{ secrets.SSH_HOST }}
-  #         username: ${{ secrets.SSH_USER }}
-  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
-  #         passphrase: ${{ secrets.SSH_PASSPHRASE }}
-  #         script: |
-  #           cd /home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
+          script: |
+            cd /home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}
 
-  #           cat << 'EOF' > .env
-  #           NODE_ENV=production
-  #           JWT_SECRET=${{ secrets.JWT_SECRET }}
-  #           EOF
+            cat << 'EOF' > .env
+            APP_NAME=LemburKu
+            APP_ENV=production
+            APP_KEY=
+            APP_DEBUG=false
+            APP_URL=http://localhost:8000
 
-  #           docker compose pull app
-  #           docker compose up -d app
-  #           docker image prune -f
+            APP_LOCALE=id
+            APP_FALLBACK_LOCALE=en
+            APP_FAKER_LOCALE=id_ID
+
+            APP_MAINTENANCE_DRIVER=file
+
+            BCRYPT_ROUNDS=12
+
+            LOG_CHANNEL=stack
+            LOG_STACK=single
+            LOG_DEPRECATIONS_CHANNEL=null
+            LOG_LEVEL=debug
+
+            DB_CONNECTION=mysql
+            DB_HOST=mysql
+            DB_PORT=3306
+            DB_DATABASE=lemburku
+            DB_USERNAME=lemburku-admin
+            DB_PASSWORD=gpppmDJGCpkAFtZfNMwtcvU62qJCft9t
+
+            SESSION_DRIVER=database
+            SESSION_LIFETIME=480
+            SESSION_ENCRYPT=false
+            SESSION_PATH=/
+            SESSION_DOMAIN=null
+            SESSION_SECURE_COOKIE=false
+
+            BROADCAST_CONNECTION=log
+            FILESYSTEM_DISK=local
+            QUEUE_CONNECTION=database
+
+            CACHE_STORE=database
+
+            MEMCACHED_HOST=127.0.0.1
+
+            REDIS_CLIENT=phpredis
+            REDIS_HOST=redis
+            REDIS_PASSWORD=null
+            REDIS_PORT=6379
+
+            MAIL_MAILER=log
+            MAIL_SCHEME=null
+            MAIL_HOST=127.0.0.1
+            MAIL_PORT=2525
+            MAIL_USERNAME=null
+            MAIL_PASSWORD=null
+            MAIL_FROM_ADDRESS="hello@example.com"
+            MAIL_FROM_NAME="${APP_NAME}"
+
+            VITE_APP_NAME="${APP_NAME}"
+
+            APP_TIMEZONE=UTC
+            APP_DISPLAY_TIMEZONE=Asia/Jakarta
+
+            APP_PORT=8080
+            DB_ROOT_PASSWORD=secret
+
+            KIMAI_BASE_URL=https://timesheet.codeoffice.net
+            KIMAI_TAGS=Overtime
+            KIMAI_ORDER_PARAM=order_by
+            KIMAI_DEFAULT_PROJECT=105
+
+            KIMAI_LEAVE_ACTIVITY=00_ANNUAL_LEAVE
+            KIMAI_LEAVE_PROJECT=105
+            KIMAI_LEAVE_DESCRIPTION="Cuti pengganti"
+            EOF
+
+            docker compose pull app
+            docker compose up -d app
+            docker image prune -f
       
         
