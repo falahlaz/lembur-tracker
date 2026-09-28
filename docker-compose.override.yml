@@ -1,0 +1,19 @@
+x-app-build: &app-build
+  build:
+    context: .
+    target: runtime
+
+services:
+  app:
+    <<: *app-build
+  queue:
+    <<: *app-build
+  scheduler:
+    <<: *app-build
+
+  nginx:
+    build:
+      context: .
+      target: web
+    volumes:
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
