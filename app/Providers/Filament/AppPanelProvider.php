@@ -4,6 +4,8 @@ namespace App\Providers\Filament;
 
 use App\Filament\Pages\Auth\EditProfile;
 use App\Filament\Pages\Auth\GantiPasswordAwal;
+use App\Filament\Pages\Auth\Login;
+use App\Filament\Pages\Auth\Register;
 use App\Filament\Pages\Dashboard;
 use App\Http\Middleware\EnsurePasswordIsChanged;
 use Filament\Enums\ThemeMode;
@@ -32,7 +34,10 @@ class AppPanelProvider extends PanelProvider
             ->default()
             ->id('app')
             ->path('app')
-            ->login()
+            ->login(Login::class)
+            // Selalu terdaftar; dibuka/ditutup admin saat runtime lewat
+            // App\Support\Registration (halamannya 404 selama tertutup).
+            ->registration(Register::class)
             // Nama + password saja; tanpa foto profil karena penyimpanan terbatas.
             // Bukan layout simple supaya sidebar dan bottom bar tetap ada.
             ->profile(EditProfile::class, isSimple: false)

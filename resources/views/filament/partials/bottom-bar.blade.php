@@ -7,8 +7,8 @@
     $cuti = CutiPengganti::getUrl();
     $path = request()->path();
     // Selama password sementara belum diganti, semua tautan ini hanya memantul
-    // balik ke halaman ganti password.
-    $locked = \Filament\Facades\Filament::auth()->user()?->mustChangePassword() ?? false;
+    // balik ke halaman ganti password. Tamu (login, daftar) juga tidak butuh.
+    $locked = \Filament\Facades\Filament::auth()->user()?->mustChangePassword() ?? true;
 @endphp
 
 @unless ($locked)

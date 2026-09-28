@@ -53,7 +53,8 @@ class UserForm
             Section::make('Akses')
                 ->columns(2)
                 ->schema([
-                    // Tidak ada self-registration; password selalu diberikan admin.
+                    // Akun buatan admin selalu memakai password sementara. Registrasi
+                    // mandiri (bila dibuka) memakai password pilihan user sendiri.
                     TextInput::make('password')
                         ->label('Password')
                         ->password()
