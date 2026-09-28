@@ -2,7 +2,7 @@ name: Push on Main Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 jobs:
 
@@ -32,18 +32,26 @@ jobs:
     needs: unit-test
     runs-on: ubuntu-latest
     environment: Docker Hub
-    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Docker meta
-        id: meta
+      - name: Docker meta (app)
+        id: meta-app
         uses: docker/metadata-action@v6
         with:
           images: |
-            ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}
+            ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}-app
+          tags: |
+            type=ref,event=branch
+
+      - name: Docker meta (web)
+        id: meta-web
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}-web
           tags: |
             type=ref,event=branch
 
@@ -56,12 +64,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and push
+      - name: Build and push (app)
         uses: docker/build-push-action@v7
         with:
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          target: runtime
+          tags: ${{ steps.meta-app.outputs.tags }}
+          labels: ${{ steps.meta-app.outputs.labels }}
+
+      - name: Build and push (web)
+        uses: docker/build-push-action@v7
+        with:
+          push: true
+          target: web
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}
 
   deploy:
     name: Deploy
@@ -176,7 +193,6 @@ jobs:
             KIMAI_LEAVE_DESCRIPTION="Cuti pengganti"
             EOF
 
-            docker compose pull app
             docker compose up -d app
             docker image prune -f
       
