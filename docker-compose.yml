@@ -1,5 +1,5 @@
 x-app: &app
-  image: falahlaz/lembur-tracker-app:dev
+  image: falahlaz/lembur-tracker-app:main
   build:
     context: .
     target: runtime
@@ -17,7 +17,7 @@ services:
     # php-fpm; nginx yang meneruskan request ke sini.
 
   nginx:
-    image: falahlaz/lembur-tracker-web:dev
+    image: falahlaz/lembur-tracker-web:main
     build:
       context: .
       target: web
