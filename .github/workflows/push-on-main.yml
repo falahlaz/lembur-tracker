@@ -2,7 +2,7 @@ name: Push on Main Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 jobs:
 
@@ -32,7 +32,6 @@ jobs:
     needs: unit-test
     runs-on: ubuntu-latest
     environment: Docker Hub
-    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout Repository
@@ -56,11 +55,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and push
+      - name: Build and push (app)
         uses: docker/build-push-action@v7
         with:
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          target: runtime
+          tags: ${{ steps.meta-app.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Build and push (web)
+        uses: docker/build-push-action@v7
+        with:
+          push: true
+          target: web
+          tags: ${{ steps.meta-web.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
   deploy:
