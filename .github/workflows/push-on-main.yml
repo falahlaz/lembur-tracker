@@ -37,12 +37,21 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Docker meta
-        id: meta
+      - name: Docker meta (app)
+        id: meta-app
         uses: docker/metadata-action@v6
         with:
           images: |
-            ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}
+            ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}-app
+          tags: |
+            type=ref,event=branch
+
+      - name: Docker meta (web)
+        id: meta-web
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}-web
           tags: |
             type=ref,event=branch
 
@@ -61,7 +70,7 @@ jobs:
           push: true
           target: runtime
           tags: ${{ steps.meta-app.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ steps.meta-app.outputs.labels }}
 
       - name: Build and push (web)
         uses: docker/build-push-action@v7
@@ -69,7 +78,7 @@ jobs:
           push: true
           target: web
           tags: ${{ steps.meta-web.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ steps.meta-web.outputs.labels }}
 
   deploy:
     name: Deploy
