@@ -49,7 +49,7 @@ class SlotLabelTest extends TestCase
 
     #[Test]
     #[DataProvider('labelTemplate')]
-    public function tidak_ada_slot_template_yang_melebihi_dua_jam(string $raw): void
+    public function tidak_ada_slot_template_yang_melebihi_dua_jam(string $raw, int $start, int $end): void
     {
         // Kimai membatasi satu timesheet maksimal 2 jam. Kalau template suatu saat
         // memuat slot yang lebih panjang, entrinya akan ditolak server satu per
