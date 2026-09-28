@@ -31,6 +31,7 @@ jobs:
     name: Image build
     needs: unit-test
     runs-on: ubuntu-latest
+    environment: Docker Hub
     if: github.ref == 'refs/heads/main'
 
     steps:
