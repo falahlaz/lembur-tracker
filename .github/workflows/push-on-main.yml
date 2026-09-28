@@ -143,7 +143,7 @@ jobs:
             DB_HOST=mysql
             DB_PORT=3306
             DB_DATABASE=lemburku
-            DB_USERNAME=lemburku-admin
+            DB_USERNAME=lembur-admin
             DB_PASSWORD=gpppmDJGCpkAFtZfNMwtcvU62qJCft9t
 
             SESSION_DRIVER=database
