@@ -14,9 +14,9 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@15c43e89cdef867065b0213be354c2841860869e
         with:
-          php-version: '8.4'
-          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, zip, gd
-          ini-values: memory_limit=512M
+          php-version: '${{ vars.PHP_VERSION }}'
+          extensions: ${{ vars.PHP_EXTENSIONS }}
+          ini-values: memory_limit=${{ vars.MEMORY_LIMIT }}
 
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -27,40 +27,40 @@ jobs:
       - name: Run Unit Tests
         run: composer test
 
-  # image-build:
-  #   name: Image build
-  #   needs: [unit-test, dependency-scan, code-analysis, secret-scan]
-  #   runs-on: ubuntu-latest
-  #   if: github.ref == 'refs/heads/main'
+  image-build:
+    name: Image build
+    needs: unit-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
 
-  #   steps:
-  #     - name: Checkout Repository
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-  #     - name: Docker meta
-  #       id: meta
-  #       uses: docker/metadata-action@v6
-  #       with:
-  #         images: |
-  #           ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}
-  #         tags: |
-  #           type=ref,event=branch
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}
+          tags: |
+            type=ref,event=branch
 
-  #     - name: Login to Docker Hub
-  #       uses: docker/login-action@v4
-  #       with:
-  #         username: ${{ vars.DOCKERHUB_USERNAME }}
-  #         password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-  #     - name: Set up Docker Buildx
-  #       uses: docker/setup-buildx-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
-  #     - name: Build and push
-  #       uses: docker/build-push-action@v7
-  #       with:
-  #         push: true
-  #         tags: ${{ steps.meta.outputs.tags }}
-  #         labels: ${{ steps.meta.outputs.labels }}
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   # deploy:
   #   name: Deploy
