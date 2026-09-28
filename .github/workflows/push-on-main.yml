@@ -193,7 +193,8 @@ jobs:
             KIMAI_LEAVE_DESCRIPTION="Cuti pengganti"
             EOF
 
-            docker compose up -d app
+            docker compose pull app nginx
+            docker compose run --rm app php artisan migrate --force
+            docker compose up -d
             docker image prune -f
-      
         
