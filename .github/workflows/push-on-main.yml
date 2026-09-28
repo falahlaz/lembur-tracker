@@ -1,0 +1,111 @@
+name: Push on Main Pipeline
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+
+  unit-test:
+    name: Run tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup PHP
+        uses: shivammathur/setup-php@15c43e89cdef867065b0213be354c2841860869e
+        with:
+          php-version: '^8.3'
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup app
+        run: composer setup
+
+      - name: Run Unit Tests
+        run: compose test
+
+  # image-build:
+  #   name: Image build
+  #   needs: [unit-test, dependency-scan, code-analysis, secret-scan]
+  #   runs-on: ubuntu-latest
+  #   if: github.ref == 'refs/heads/main'
+
+  #   steps:
+  #     - name: Checkout Repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Docker meta
+  #       id: meta
+  #       uses: docker/metadata-action@v6
+  #       with:
+  #         images: |
+  #           ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.APP_NAME }}
+  #         tags: |
+  #           type=ref,event=branch
+
+  #     - name: Login to Docker Hub
+  #       uses: docker/login-action@v4
+  #       with:
+  #         username: ${{ vars.DOCKERHUB_USERNAME }}
+  #         password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  #     - name: Set up Docker Buildx
+  #       uses: docker/setup-buildx-action@v4
+
+  #     - name: Build and push
+  #       uses: docker/build-push-action@v7
+  #       with:
+  #         push: true
+  #         tags: ${{ steps.meta.outputs.tags }}
+  #         labels: ${{ steps.meta.outputs.labels }}
+
+  # deploy:
+  #   name: Deploy
+  #   needs: image-build
+  #   runs-on: ubuntu-latest
+  #   if: github.ref == 'refs/heads/main'
+
+  #   steps:
+  #     - name: Checkout Repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Ensure target directory exists
+  #       uses: appleboy/ssh-action@v1.2.0
+  #       with:
+  #         passphrase: ${{ secrets.SSH_PASSPHRASE }}
+  #         host: ${{ secrets.SSH_HOST }}
+  #         username: ${{ secrets.SSH_USER }}
+  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
+  #         script: mkdir -p /home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}
+
+  #     - name: Copy docker-compose.yml
+  #       uses: appleboy/scp-action@v0.1.7
+  #       with:
+  #         host: ${{ secrets.SSH_HOST }}
+  #         username: ${{ secrets.SSH_USER }}
+  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
+  #         passphrase: ${{ secrets.SSH_PASSPHRASE }}
+  #         source: "docker-compose.yml"
+  #         target: "/home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}"
+
+  #     - name: Deploy
+  #       uses: appleboy/ssh-action@v1.2.0
+  #       with:
+  #         host: ${{ secrets.SSH_HOST }}
+  #         username: ${{ secrets.SSH_USER }}
+  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
+  #         passphrase: ${{ secrets.SSH_PASSPHRASE }}
+  #         script: |
+  #           cd /home/${{ secrets.SSH_USER }}/${{ vars.APP_NAME }}
+
+  #           cat << 'EOF' > .env
+  #           NODE_ENV=production
+  #           JWT_SECRET=${{ secrets.JWT_SECRET }}
+  #           EOF
+
+  #           docker compose pull app
+  #           docker compose up -d app
+  #           docker image prune -f
+      
+        
