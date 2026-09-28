@@ -23,7 +23,7 @@ jobs:
         run: composer setup
 
       - name: Run Unit Tests
-        run: compose test
+        run: composer test
 
   # image-build:
   #   name: Image build
