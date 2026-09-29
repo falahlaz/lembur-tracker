@@ -4,6 +4,10 @@ on:
   push:
     branches: [ main, dev ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
 
   unit-test:
@@ -191,7 +195,7 @@ jobs:
             KIMAI_LEAVE_ACTIVITY={{ secrets.KIMAI_LEAVE_ACTIVITY }}
             KIMAI_LEAVE_PROJECT={{ secrets.KIMAI_LEAVE_PROJECT }}
             KIMAI_LEAVE_DESCRIPTION={{ secrets.KIMAI_LEAVE_DESCRIPTION }}
-            
+
             EOF
 
       - name: Deploy
