@@ -15,6 +15,7 @@ use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Text;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Concerns\InteractsWithSchemas;
 use Filament\Schemas\Contracts\HasSchemas;
 use Filament\Schemas\Schema;
@@ -69,14 +70,17 @@ class Preferensi extends Page implements HasSchemas
                     ->schema([
                         Text::make(fn () => $this->kimaiStatusLine()),
 
+                        View::make('filament.partials.kimai-token-steps')
+                            ->visible(fn () => ! Auth::user()->hasKimaiConnection()),
+
                         TextInput::make('kimai_token')
                             ->label('API Key Kimai')
                             ->password()
                             ->revealable(false)
                             ->autocomplete(false)
                             ->placeholder(fn () => Auth::user()->kimaiTokenMask() ?? 'Tempel token dari Kimai')
-                            ->helperText('Buat di Kimai lewat Profil → API Access. Token hanya ditampilkan '
-                                .'sekali saat dibuat, jadi salin utuh sebelum menutup halamannya.')
+                            ->helperText('Buat di Kimai lewat Profil → API Access → + Create. Token hanya '
+                                .'ditampilkan sekali saat dibuat, jadi salin utuh sebelum menutup halamannya.')
                             // F-11 — tersimpan hanya bila tes koneksi lulus.
                             ->hintAction(
                                 Action::make('simpanToken')
