@@ -121,10 +121,10 @@ jobs:
 
             cat << 'EOF' > .env
             APP_NAME=LemburKu
-            APP_ENV=production
-            APP_KEY=base64:Ia0l+9gZrpt1bKJyocScnrsUcPuU/VmR5AbvF7ecXTo=
-            APP_DEBUG=true
-            APP_URL=http://localhost:8000
+            APP_ENV=${{ secrets.APP_ENV}}
+            APP_KEY=${{ secrets.APP_KEY }}
+            APP_DEBUG={{ secrets.APP_DEBUG }}
+            APP_URL={{ secrets.APP_URL }}
 
             APP_LOCALE=id
             APP_FALLBACK_LOCALE=en
@@ -139,12 +139,12 @@ jobs:
             LOG_DEPRECATIONS_CHANNEL=null
             LOG_LEVEL=debug
 
-            DB_CONNECTION=mysql
-            DB_HOST=mysql
-            DB_PORT=3306
-            DB_DATABASE=lemburku
-            DB_USERNAME=lembur-admin
-            DB_PASSWORD=gpppmDJGCpkAFtZfNMwtcvU62qJCft9t
+            DB_CONNECTION={{ secrets.DB_CONNECTION }}
+            DB_HOST={{ secrets.DB_HOST }}
+            DB_PORT={{ secrets.DB_PORT }}
+            DB_DATABASE={{ secrets.DB_DATABASE }}
+            DB_USERNAME={{ secrets.DB_USERNAME }}
+            DB_PASSWORD={{ secrets.DB_PASSWORD }}
 
             SESSION_DRIVER=database
             SESSION_LIFETIME=480
@@ -161,10 +161,10 @@ jobs:
 
             MEMCACHED_HOST=127.0.0.1
 
-            REDIS_CLIENT=phpredis
-            REDIS_HOST=redis
-            REDIS_PASSWORD=null
-            REDIS_PORT=6379
+            REDIS_CLIENT={{ secrets.REDIS_CLIENT }}
+            REDIS_HOST={{ secrets.REDIS_HOST }}
+            REDIS_PASSWORD={{ secrets.REDIS_PASSWORD }}
+            REDIS_PORT={{ secrets.REDIS_PORT }}
 
             MAIL_MAILER=log
             MAIL_SCHEME=null
@@ -180,17 +180,18 @@ jobs:
             APP_TIMEZONE=UTC
             APP_DISPLAY_TIMEZONE=Asia/Jakarta
 
-            APP_PORT=8080
-            DB_ROOT_PASSWORD=secret
+            APP_PORT={{ secrets.APP_PORT }}
+            DB_ROOT_PASSWORD={{ secrets.DB_ROOT_PASSWORD }}
 
-            KIMAI_BASE_URL=https://timesheet.codeoffice.net
-            KIMAI_TAGS=Overtime
-            KIMAI_ORDER_PARAM=order_by
-            KIMAI_DEFAULT_PROJECT=105
+            KIMAI_BASE_URL={{ secrets.KIMAI_BASE_URL }}
+            KIMAI_TAGS={{ secrets.KIMAI_TAGS }}
+            KIMAI_ORDER_PARAM={{ secrets.KIMAI_ORDER_PARAM }}
+            KIMAI_DEFAULT_PROJECT={{ secrets.KIMAI_DEFAULT_PROJECT }}
 
-            KIMAI_LEAVE_ACTIVITY=00_ANNUAL_LEAVE
-            KIMAI_LEAVE_PROJECT=105
-            KIMAI_LEAVE_DESCRIPTION="Cuti pengganti"
+            KIMAI_LEAVE_ACTIVITY={{ secrets.KIMAI_LEAVE_ACTIVITY }}
+            KIMAI_LEAVE_PROJECT={{ secrets.KIMAI_LEAVE_PROJECT }}
+            KIMAI_LEAVE_DESCRIPTION={{ secrets.KIMAI_LEAVE_DESCRIPTION }}
+            
             EOF
 
       - name: Deploy
