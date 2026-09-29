@@ -123,7 +123,7 @@ jobs:
             APP_NAME=LemburKu
             APP_ENV=production
             APP_KEY=
-            APP_DEBUG=false
+            APP_DEBUG=true
             APP_URL=http://localhost:8000
 
             APP_LOCALE=id
