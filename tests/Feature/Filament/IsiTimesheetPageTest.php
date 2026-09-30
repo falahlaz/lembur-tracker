@@ -241,4 +241,17 @@ class IsiTimesheetPageTest extends TestCase
             ->set('data.rows.baris-0.durasi', '2:30')
             ->assertSet('data.rows.baris-0.selesai', '11:30');
     }
+
+    #[Test]
+    public function judul_kartu_merangkum_isi_baris(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $this->halaman([
+            $this->baris('2026-09-22', '09:00', '11:00'),
+            $this->baris('2026-09-22', '22:00', '00:00', ['lembur' => true]),
+        ])
+            ->assertSee('09:00–11:00 (2j)')
+            ->assertSee('22:00–24:00 (2j) · 31_DEV_FEATURE · Lembur');
+    }
 }

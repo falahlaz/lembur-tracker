@@ -17,7 +17,6 @@ use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Repeater;
-use Filament\Forms\Components\Repeater\TableColumn;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -30,6 +29,7 @@ use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Concerns\InteractsWithSchemas;
 use Filament\Schemas\Contracts\HasSchemas;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\Width;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
@@ -64,6 +64,9 @@ class IsiTimesheet extends Page implements HasSchemas
     protected static ?string $title = 'Isi Timesheet ke Kimai';
 
     protected string $view = 'filament.pages.isi-timesheet';
+
+    /** Kartu pekerjaan butuh ruang; batas lebar bawaan panel menyisakan margin kosong. */
+    protected Width|string|null $maxContentWidth = Width::Full;
 
     public ?array $data = [];
 
@@ -114,58 +117,69 @@ class IsiTimesheet extends Page implements HasSchemas
                     ->visible(fn (): bool => ! $this->katalogTersedia())
                     ->helperText('Daftar project tidak bisa diambil dari Kimai, jadi id-nya diisi manual.'),
 
+                // Satu kartu per baris, bukan tabel: tujuh kolom sejajar memaksa
+                // setiap input sempit (dan scroll ke samping di laptop), padahal
+                // deskripsi justru yang paling panjang. Di layar lebar: waktu dan
+                // activity di atas, deskripsi selebar kartu di bawah; di HP turun
+                // satu per satu, dengan Mulai–Selesai tetap sebaris.
                 Repeater::make('rows')
                     ->label('Pekerjaan')
-                    ->table([
-                        // Lebar tetap untuk kolom jam: tanpa ini TimePicker menyusut
-                        // sampai jamnya terpotong, dan deskripsi yang justru paling
-                        // panjang kebagian sisa yang sempit.
-                        TableColumn::make('Tanggal')->markAsRequired()->width('9.5rem'),
-                        TableColumn::make('Mulai')->markAsRequired()->width('8.5rem'),
-                        TableColumn::make('Durasi')->width('5rem'),
-                        TableColumn::make('Selesai')->markAsRequired()->width('8.5rem'),
-                        TableColumn::make('Activity')->markAsRequired()->width('12rem'),
-                        TableColumn::make('Deskripsi')->markAsRequired()->width('16rem'),
-                        TableColumn::make('Lembur')->width('4.5rem'),
-                    ])
+                    ->columns(12)
                     ->schema([
                         DatePicker::make('tanggal')
-                            ->hiddenLabel()
+                            ->label('Tanggal')
                             ->required()
-                            ->live(onBlur: true),
+                            ->live(onBlur: true)
+                            ->columnSpan(['default' => 12, 'sm' => 6, 'lg' => 3]),
                         TimePicker::make('mulai')
-                            ->hiddenLabel()
+                            ->label('Mulai')
                             ->seconds(false)
                             ->required()
                             ->live(onBlur: true)
-                            ->afterStateUpdated(fn (Get $get, Set $set) => $this->isiSelesaiDariDurasi($get, $set)),
-                        // Meniru pasangan "Duration / End" di form Kimai: salah satu
-                        // cukup, yang lain menyesuaikan.
-                        TextInput::make('durasi')
-                            ->hiddenLabel()
-                            ->placeholder('j:mm')
-                            ->live(onBlur: true)
-                            ->afterStateUpdated(fn (Get $get, Set $set) => $this->isiSelesaiDariDurasi($get, $set)),
+                            ->afterStateUpdated(fn (Get $get, Set $set) => $this->isiSelesaiDariDurasi($get, $set))
+                            ->columnSpan(['default' => 6, 'sm' => 2]),
                         TimePicker::make('selesai')
-                            ->hiddenLabel()
+                            ->label('Selesai')
                             ->seconds(false)
                             ->required()
                             ->live(onBlur: true)
-                            ->afterStateUpdated(fn (Get $get, Set $set) => $this->isiDurasiDariSelesai($get, $set)),
+                            ->afterStateUpdated(fn (Get $get, Set $set) => $this->isiDurasiDariSelesai($get, $set))
+                            ->columnSpan(['default' => 6, 'sm' => 2]),
+                        // Meniru pasangan "Duration / End" di form Kimai: salah satu
+                        // cukup, yang lain menyesuaikan. Diletakkan sesudah Selesai
+                        // supaya di HP Mulai–Selesai sebaris dan Durasi di bawahnya;
+                        // tiga TimePicker sebaris di layar sempit memotong jamnya.
+                        TextInput::make('durasi')
+                            ->label('Durasi')
+                            ->placeholder('2:30')
+                            ->hint('j:mm')
+                            ->live(onBlur: true)
+                            ->afterStateUpdated(fn (Get $get, Set $set) => $this->isiSelesaiDariDurasi($get, $set))
+                            ->columnSpan(['default' => 12, 'sm' => 2]),
                         Select::make('activity_id')
-                            ->hiddenLabel()
+                            ->label('Activity')
                             ->options(fn (Get $get): array => $this->opsiActivity((int) $get('../../project_id')))
                             ->searchable()
-                            ->required(),
+                            ->required()
+                            ->live()
+                            ->columnSpan(['default' => 12, 'lg' => 3]),
                         Textarea::make('deskripsi')
-                            ->hiddenLabel()
-                            ->rows(1)
+                            ->label('Deskripsi pekerjaan')
+                            ->placeholder('Misal: perbaiki perhitungan lembur di laporan bulanan')
+                            ->rows(2)
                             ->autosize()
-                            ->required(),
+                            ->required()
+                            ->columnSpan(['default' => 12, 'lg' => 10]),
                         Toggle::make('lembur')
-                            ->hiddenLabel()
-                            ->live(),
+                            ->label('Lembur')
+                            ->inline(false)
+                            ->live()
+                            ->columnSpan(['default' => 12, 'lg' => 2]),
                     ])
+                    // Judul kartu merangkum isinya, supaya kartu yang dilipat tetap
+                    // terbaca: "Sen, 22 Sep · 09:00–11:00 (2j) · Development".
+                    ->itemLabel(fn (array $state): string => $this->labelBaris($state))
+                    ->collapsible()
                     ->defaultItems(1)
                     ->minItems(1)
                     ->reorderable(false)
@@ -411,6 +425,52 @@ class IsiTimesheet extends Page implements HasSchemas
         ksort($opsi);
 
         return $opsi;
+    }
+
+    /**
+     * Judul kartu: "Sen, 22 Sep · 09:00–11:00 (2j) · Development · Lembur".
+     * Bagian yang belum diisi dilewati saja.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function labelBaris(array $row): string
+    {
+        $bagian = [];
+
+        try {
+            if (filled($row['tanggal'] ?? null)) {
+                $bagian[] = CarbonImmutable::parse((string) $row['tanggal'])->translatedFormat('D, j M');
+            }
+        } catch (\Throwable) {
+            // Tanggal setengah jadi; judulnya cukup tanpa tanggal.
+        }
+
+        $mulai = ManualEntryBuilder::minuteOfDay($row['mulai'] ?? null);
+        $selesai = ManualEntryBuilder::minuteOfDay($row['selesai'] ?? null, asEnd: true);
+
+        if ($mulai !== null && $selesai !== null && $selesai > $mulai) {
+            $bagian[] = sprintf('%s–%s (%s)', self::jamTeks($mulai), self::jamTeks($selesai), Format::durasiRingkas($selesai - $mulai));
+        } elseif ($mulai !== null) {
+            $bagian[] = 'mulai '.self::jamTeks($mulai);
+        }
+
+        $activity = $this->opsiActivity((int) ($this->data['project_id'] ?? 0))[(int) ($row['activity_id'] ?? 0)] ?? null;
+
+        if ($activity !== null) {
+            $bagian[] = $activity;
+        }
+
+        if ($row['lembur'] ?? false) {
+            $bagian[] = 'Lembur';
+        }
+
+        return $bagian === [] ? 'Baris baru' : implode(' · ', $bagian);
+    }
+
+    /** 1440 ditulis "24:00", sama dengan cara builder membaca selesai tengah malam. */
+    private static function jamTeks(int $menit): string
+    {
+        return sprintf('%02d:%02d', intdiv($menit, 60), $menit % 60);
     }
 
     private function kosongkanActivity(): void
