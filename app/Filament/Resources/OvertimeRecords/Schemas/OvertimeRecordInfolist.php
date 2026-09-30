@@ -60,6 +60,7 @@ class OvertimeRecordInfolist
                     TextEntry::make('evidence_url')
                         ->label('Evidence')
                         ->url(fn (OvertimeRecord $r) => $r->evidence_url, shouldOpenInNewTab: true)
+                        ->placeholder('Belum diisi')
                         ->columnSpanFull(),
 
                     TextEntry::make('notes')->label('Catatan')->placeholder('—')->columnSpanFull(),

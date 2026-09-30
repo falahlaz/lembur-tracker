@@ -2,7 +2,7 @@
 
 namespace App\Filament\Resources\OvertimeRecords\Tables;
 
-use App\Domain\Lembur\PayrollPeriodResolver;
+use App\Domain\Lembur\DurationCalculator;
 use App\Enums\OvertimeStatus;
 use App\Enums\Source;
 use App\Enums\Tier;
@@ -18,13 +18,13 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Tables\Columns\Layout\Panel;
 use Filament\Tables\Columns\Layout\Split;
 use Filament\Tables\Columns\Layout\Stack;
-use App\Domain\Lembur\DurationCalculator;
 use Filament\Tables\Columns\Summarizers\Sum;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Date;
 
 /** F-05 — history lembur: bisa difilter, dan setiap angka bisa ditelusuri. */
 class OvertimeRecordsTable
@@ -150,6 +150,7 @@ class OvertimeRecordsTable
                         TextColumn::make('evidence_url')
                             ->label('Evidence')
                             ->formatStateUsing(fn () => 'Buka evidence')
+                            ->placeholder('Belum diisi')
                             ->url(fn (OvertimeRecord $r) => $r->evidence_url, shouldOpenInNewTab: true)
                             ->icon('heroicon-m-arrow-top-right-on-square')
                             ->color('primary')
@@ -192,10 +193,10 @@ class OvertimeRecordsTable
                     ->indicateUsing(function (array $data): array {
                         $indicators = [];
                         if ($data['dari'] ?? null) {
-                            $indicators[] = 'Dari '.Format::tanggalPanjang(\Illuminate\Support\Facades\Date::parse($data['dari']));
+                            $indicators[] = 'Dari '.Format::tanggalPanjang(Date::parse($data['dari']));
                         }
                         if ($data['sampai'] ?? null) {
-                            $indicators[] = 'Sampai '.Format::tanggalPanjang(\Illuminate\Support\Facades\Date::parse($data['sampai']));
+                            $indicators[] = 'Sampai '.Format::tanggalPanjang(Date::parse($data['sampai']));
                         }
 
                         return $indicators;

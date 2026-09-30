@@ -188,7 +188,7 @@ class LeaveClaimsTable
                 '- %s · %s · evidence: %s',
                 Format::tanggalPanjang($record->overtime_date),
                 Format::durasi($allocation->allocated_minutes),
-                $record->evidence_url,
+                $record->evidence_url ?: '(belum diisi)',
             );
         }
 

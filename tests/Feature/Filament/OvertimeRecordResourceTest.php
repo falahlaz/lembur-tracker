@@ -2,8 +2,11 @@
 
 namespace Tests\Feature\Filament;
 
+use App\Enums\OvertimeStatus;
+use App\Filament\Resources\OvertimeRecords\OvertimeRecordResource;
 use App\Filament\Resources\OvertimeRecords\Pages\CreateOvertimeRecord;
 use App\Filament\Resources\OvertimeRecords\Pages\ListOvertimeRecords;
+use App\Filament\Resources\OvertimeRecords\Schemas\OvertimeRecordInfolist;
 use App\Models\LeaveBalance;
 use App\Models\OvertimeRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -47,6 +50,26 @@ class OvertimeRecordResourceTest extends TestCase
         $this->assertSame(50_000, $record->meal_allowance_amount);
         $this->assertSame($user->id, $record->created_by_id);
         $this->assertSame('2026-04-19', $record->leaveBalance->expires_at->toDateString());
+    }
+
+    #[Test]
+    public function form_boleh_disimpan_tanpa_evidence_untuk_diisi_nanti(): void
+    {
+        $this->actingAs($this->employee());
+
+        Livewire::test(CreateOvertimeRecord::class)
+            ->fillForm([
+                'overtime_date' => '2026-03-19',
+                'start_time' => '19:00',
+                'end_time' => '23:30',
+                'work_description' => 'Hotfix payment gateway timeout',
+                'evidence_url' => null,
+                'status' => 'recorded',
+            ])
+            ->call('create')
+            ->assertHasNoFormErrors();
+
+        $this->assertNull(OvertimeRecord::query()->sole()->evidence_url);
     }
 
     #[Test]
@@ -216,6 +239,7 @@ class OvertimeRecordResourceTest extends TestCase
             ])
             ->assertSee('Berisiko melewati cut-off');
     }
+
     #[Test]
     public function audit_trail_mencatat_siapa_kapan_dan_apa_yang_berubah(): void
     {
@@ -224,9 +248,9 @@ class OvertimeRecordResourceTest extends TestCase
         $this->actingAs($user);
 
         $record = $this->logOvertime($user, '2026-03-19', '19:00', '23:30');
-        $record->update(['status' => \App\Enums\OvertimeStatus::Approved]);
+        $record->update(['status' => OvertimeStatus::Approved]);
 
-        $trail = \App\Filament\Resources\OvertimeRecords\Schemas\OvertimeRecordInfolist::auditTrail($record->fresh());
+        $trail = OvertimeRecordInfolist::auditTrail($record->fresh());
 
         $this->assertNotEmpty($trail);
         $this->assertSame($user->name, $trail[0]['who']);
@@ -242,7 +266,7 @@ class OvertimeRecordResourceTest extends TestCase
         $this->actingAs($user);
         $record = $this->logOvertime($user, '2026-03-19', '19:00', '23:30');
 
-        $this->get(\App\Filament\Resources\OvertimeRecords\OvertimeRecordResource::getUrl('view', ['record' => $record]))
+        $this->get(OvertimeRecordResource::getUrl('view', ['record' => $record]))
             ->assertOk()
             ->assertSee('4 jam 30 menit')
             ->assertSee('Rp50.000')
