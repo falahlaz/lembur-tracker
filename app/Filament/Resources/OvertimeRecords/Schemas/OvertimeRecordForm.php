@@ -5,7 +5,6 @@ namespace App\Filament\Resources\OvertimeRecords\Schemas;
 use App\Domain\Lembur\DurationCalculator;
 use App\Domain\Lembur\OvertimeDayCalculator;
 use App\Enums\OvertimeStatus;
-use App\Enums\Role;
 use App\Models\OvertimeRecord;
 use App\Models\User;
 use App\Rules\EvidenceReviewedBeforeSubmission;
@@ -17,10 +16,12 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\TimePicker;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Text;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\HtmlString;
 
 /**
  * F-02 — layar terpenting di seluruh aplikasi (P-6). Satu kolom, tanpa scroll
@@ -103,7 +104,7 @@ class OvertimeRecordForm
                 Section::make('Preview hak')
                     ->description('Dihitung dari isian di atas. Belum disimpan.')
                     ->schema([
-                        \Filament\Schemas\Components\Text::make(fn (Get $get, ?OvertimeRecord $record) => new \Illuminate\Support\HtmlString(
+                        Text::make(fn (Get $get, ?OvertimeRecord $record) => new HtmlString(
                             view('filament.previews.entitlement', [
                                 'preview' => self::buildPreview($get, $record),
                             ])->render()
@@ -131,14 +132,13 @@ class OvertimeRecordForm
                 TextInput::make('evidence_url')
                     ->label('URL evidence')
                     ->url()
-                    ->required()
                     ->live(debounce: 300)
                     ->maxLength(2048)
                     ->helperText(fn (?OvertimeRecord $record) => $record?->needsEvidenceReview()
                         // SY-12 — dikatakan terus terang: link ini pengisi sementara.
                         ? 'Sekarang masih berisi deep link Kimai. Ganti dengan link SPL atau '
                             .'timesheet di OneDrive kamu sebelum mengajukan.'
-                        : 'Link SPL atau timesheet KIMAI di OneDrive kamu'),
+                        : 'Opsional — link SPL atau timesheet KIMAI di OneDrive kamu, bisa diisi nanti.'),
 
                 Select::make('status')
                     ->label('Status')
