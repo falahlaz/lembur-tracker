@@ -4,10 +4,12 @@ namespace App\Filament\Pages;
 
 use App\Domain\Lembur\PayrollPeriodResolver;
 use App\Exports\RekapLemburExport;
+use App\Exports\SplExport;
 use App\Models\PayrollPeriod;
 use App\Models\User;
 use App\Support\Format;
 use BackedEnum;
+use Carbon\CarbonInterface;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Select;
@@ -23,7 +25,7 @@ use Illuminate\Support\Facades\Date;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
-/** F-08 — ekspor rekap per periode payroll atau rentang tanggal bebas. */
+/** F-08 — ekspor rekap dan SPL per periode payroll atau rentang tanggal bebas. */
 class Rekap extends Page implements HasSchemas
 {
     use InteractsWithSchemas;
@@ -102,6 +104,38 @@ class Rekap extends Page implements HasSchemas
 
     public function export(): BinaryFileResponse|Renderable
     {
+        [$user, $from, $to, $label] = $this->scope();
+
+        $export = new RekapLemburExport($user, $from, $to, $label);
+
+        return Excel::download($export, $export->fileName());
+    }
+
+    /** Surat Perintah Lembur dalam template kantor, untuk diunggah tiap tanggal 19. */
+    public function exportSpl(): BinaryFileResponse
+    {
+        [$user, $from, $to] = $this->scope();
+
+        $export = new SplExport($user, $from, $to);
+
+        return response()
+            ->download($export->store(), $export->fileName())
+            ->deleteFileAfterSend();
+    }
+
+    /** Data SPL yang belum diisi di Profil milik karyawan yang dipilih. */
+    public function missingSplFields(): array
+    {
+        $user = Auth::user()->isAdmin() && ! empty($this->data['user_id'])
+            ? User::find($this->data['user_id'])
+            : Auth::user();
+
+        return $user?->missingSplFields() ?? [];
+    }
+
+    /** @return array{0: User, 1: CarbonInterface, 2: CarbonInterface, 3: string} */
+    private function scope(): array
+    {
         $data = $this->form->getState();
 
         $user = Auth::user()->isAdmin() && ! empty($data['user_id'])
@@ -110,17 +144,13 @@ class Rekap extends Page implements HasSchemas
 
         if (($data['mode'] ?? 'periode') === 'periode') {
             $period = PayrollPeriod::findOrFail($data['payroll_period_id']);
-            $from = $period->period_start;
-            $to = $period->period_end;
-            $label = $period->label;
-        } else {
-            $from = Date::parse($data['dari']);
-            $to = Date::parse($data['sampai']);
-            $label = $from->translatedFormat('j M Y').' - '.$to->translatedFormat('j M Y');
+
+            return [$user, $period->period_start, $period->period_end, $period->label];
         }
 
-        $export = new RekapLemburExport($user, $from, $to, $label);
+        $from = Date::parse($data['dari']);
+        $to = Date::parse($data['sampai']);
 
-        return Excel::download($export, $export->fileName());
+        return [$user, $from, $to, $from->translatedFormat('j M Y').' - '.$to->translatedFormat('j M Y')];
     }
 }
