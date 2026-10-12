@@ -17,6 +17,10 @@ use Illuminate\Notifications\Notifiable;
 #[Fillable([
     'name', 'email', 'password', 'role', 'manager_id', 'is_active', 'must_change_password',
     'rounding_enabled', 'notification_prefs', 'default_late_arrival_time',
+    // Data SPL — diisi user sendiri di Profil.
+    'division', 'position', 'default_project',
+    'approver1_name', 'approver1_position', 'approver2_name', 'approver2_position',
+    'signature_path',
 ])]
 #[Hidden(['password', 'remember_token', 'kimai_api_token'])]
 class User extends Authenticatable implements FilamentUser
@@ -63,6 +67,18 @@ class User extends Authenticatable implements FilamentUser
     public function wantsNotification(string $type): bool
     {
         return (bool) ($this->notification_prefs[$type] ?? true);
+    }
+
+    /** Data yang dibutuhkan SPL tetapi belum diisi, dalam label yang dikenali user. */
+    public function missingSplFields(): array
+    {
+        return array_keys(array_filter([
+            'Divisi' => blank($this->division),
+            'Jabatan' => blank($this->position),
+            'Penyetuju 1' => blank($this->approver1_name),
+            'Penyetuju 2' => blank($this->approver2_name),
+            'Tanda tangan' => blank($this->signature_path),
+        ]));
     }
 
     public function manager(): BelongsTo
