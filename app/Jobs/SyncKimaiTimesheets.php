@@ -5,8 +5,10 @@ namespace App\Jobs;
 use App\Domain\Kimai\Exceptions\KimaiTokenInvalid;
 use App\Domain\Kimai\KimaiConnection;
 use App\Domain\Kimai\KimaiSynchronizer;
+use App\Domain\Kimai\SyncRangeResolver;
 use App\Enums\SyncTrigger;
 use App\Models\User;
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Cache;
@@ -25,7 +27,15 @@ class SyncKimaiTimesheets implements ShouldQueue
     /** SY-20 — percobaan pertama + 3 retry. */
     public int $tries = 4;
 
-    public function __construct(public readonly User $user) {}
+    /**
+     * `$from`/`$to` (Y-m-d) hanya diisi oleh aksi "Sync rentang" di Riwayat Sync.
+     * Disimpan sebagai string supaya payload queue tetap sederhana.
+     */
+    public function __construct(
+        public readonly User $user,
+        public readonly ?string $from = null,
+        public readonly ?string $to = null,
+    ) {}
 
     /** SY-20 — backoff 10 detik, 60 detik, 180 detik. */
     public function backoff(): array
@@ -87,7 +97,16 @@ class SyncKimaiTimesheets implements ShouldQueue
         }
 
         try {
-            $synchronizer->run($this->user, SyncTrigger::Manual);
+            if ($this->from !== null && $this->to !== null) {
+                $range = app(SyncRangeResolver::class)->custom(
+                    CarbonImmutable::parse($this->from),
+                    CarbonImmutable::parse($this->to),
+                );
+
+                $synchronizer->run($this->user, SyncTrigger::Range, $range);
+            } else {
+                $synchronizer->run($this->user, SyncTrigger::Manual);
+            }
         } catch (KimaiTokenInvalid $e) {
             // SY-22 — token ditolak tidak pernah di-retry: mencobanya lagi hanya
             // menghasilkan 401 yang sama tiga kali.

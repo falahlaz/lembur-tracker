@@ -6,10 +6,12 @@ use App\Domain\Kimai\Exceptions\KimaiTokenInvalid;
 use App\Domain\Kimai\KimaiClient;
 use App\Domain\Kimai\KimaiConnection;
 use App\Domain\Kimai\KimaiSynchronizer;
+use App\Domain\Kimai\SyncRangeResolver;
 use App\Enums\OvertimeStatus;
 use App\Enums\Source;
 use App\Enums\SyncAction;
 use App\Enums\SyncStatus;
+use App\Enums\SyncTrigger;
 use App\Enums\Tier;
 use App\Jobs\SyncKimaiTimesheets;
 use App\Models\OvertimeRecord;
@@ -937,5 +939,85 @@ class KimaiSyncTest extends TestCase
         $this->assertSame(440, $record->duration_raw_minutes);
         $this->assertSame(440, $record->duration_effective_minutes);
         $this->assertFalse($record->rounding_applied);
+    }
+
+    #[Test]
+    public function sync_rentang_menarik_lembur_sebelum_watermark_tanpa_menggeser_watermark(): void
+    {
+        $user = $this->kimaiUser();
+        $user->kimai_synced_through = '2026-09-12';
+        $user->save();
+
+        // Diinput di Kimai belakangan, setelah watermark sudah lewat — dan jatuh di
+        // periode payroll sebelumnya, di luar jangkauan tombol sync biasa.
+        $this->fakeKimai([$this->kimaiEntry([
+            'begin' => '2026-08-10T20:00:00+0700',
+            'end' => '2026-08-10T22:00:00+0700',
+        ])]);
+
+        $range = app(SyncRangeResolver::class)->custom(
+            CarbonImmutable::parse('2026-08-01'),
+            CarbonImmutable::parse('2026-08-31'),
+        );
+
+        $run = app(KimaiSynchronizer::class)->run($user, SyncTrigger::Range, $range);
+
+        $this->assertSame(SyncTrigger::Range, $run->trigger);
+        $this->assertSame('2026-08-01', $run->range_start->toDateString());
+        $this->assertSame(1, $run->count_created);
+        $this->assertSame('2026-08-10', OvertimeRecord::sole()->overtime_date->toDateString());
+        $this->assertSame('2026-09-12', $user->refresh()->kimai_synced_through->toDateString());
+
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/api/timesheets')
+            && str_contains(urldecode($request->url()), 'begin=2026-08-01T00:00:00'));
+    }
+
+    #[Test]
+    public function sync_rentang_yang_tumpang_tindih_tidak_menduplikasi(): void
+    {
+        $user = $this->kimaiUser();
+        $this->fakeKimai([$this->kimaiEntry()]);
+
+        $this->sync($user);
+
+        $range = app(SyncRangeResolver::class)->custom(
+            CarbonImmutable::parse('2026-09-01'),
+            CarbonImmutable::parse('2026-09-13'),
+        );
+
+        $run = app(KimaiSynchronizer::class)->run($user->refresh(), SyncTrigger::Range, $range);
+
+        $this->assertSame(0, $run->count_created);
+        $this->assertSame(1, OvertimeRecord::count());
+    }
+
+    #[Test]
+    public function sync_rentang_dipagari_batas_mundur_dan_hari_ini(): void
+    {
+        $range = app(SyncRangeResolver::class)->custom(
+            CarbonImmutable::parse('2026-01-01'),
+            CarbonImmutable::parse('2026-12-31'),
+        );
+
+        // Hari ini 13 September; lookback 90 hari jatuh di 15 Juni.
+        $this->assertSame('2026-06-15', $range->begin->toDateString());
+        $this->assertTrue($range->end->lte(CarbonImmutable::now(config('kimai.timezone'))));
+    }
+
+    #[Test]
+    public function job_dengan_rentang_menjalankan_sync_rentang(): void
+    {
+        $user = $this->kimaiUser();
+        $this->fakeKimai([$this->kimaiEntry()]);
+
+        (new SyncKimaiTimesheets($user, '2026-09-01', '2026-09-05'))
+            ->handle(app(KimaiSynchronizer::class), app(KimaiConnection::class));
+
+        $run = SyncRun::sole();
+
+        $this->assertSame(SyncTrigger::Range, $run->trigger);
+        $this->assertSame('2026-09-01', $run->range_start->toDateString());
+        $this->assertSame(1, OvertimeRecord::count());
+        $this->assertNull($user->refresh()->kimai_synced_through);
     }
 }

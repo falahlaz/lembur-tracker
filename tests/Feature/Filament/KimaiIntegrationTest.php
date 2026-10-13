@@ -379,4 +379,50 @@ class KimaiIntegrationTest extends TestCase
             ->assertSee('Menyinkronkan…')
             ->assertSee('wire:poll.3s', escape: false);
     }
+
+    #[Test]
+    public function riwayat_sync_bisa_sync_rentang_pilihan(): void
+    {
+        Queue::fake();
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        Livewire::test(RiwayatSync::class)
+            ->callAction('syncKimaiRentang', data: ['dari' => '2026-08-01', 'sampai' => '2026-08-31'])
+            ->assertHasNoActionErrors();
+
+        Queue::assertPushed(SyncKimaiTimesheets::class, fn (SyncKimaiTimesheets $job) => $job->user->is($user)
+            && $job->from === '2026-08-01'
+            && $job->to === '2026-08-31');
+        $this->assertTrue(SyncKimaiTimesheets::isPendingFor($user));
+    }
+
+    #[Test]
+    public function sync_rentang_menolak_tanggal_akhir_sebelum_tanggal_awal(): void
+    {
+        Queue::fake();
+        $this->actingAs($this->kimaiUser());
+
+        Livewire::test(RiwayatSync::class)
+            ->callAction('syncKimaiRentang', data: ['dari' => '2026-09-10', 'sampai' => '2026-09-01'])
+            ->assertHasActionErrors(['sampai']);
+
+        Queue::assertNothingPushed();
+    }
+
+    #[Test]
+    public function sync_rentang_nonaktif_selama_sync_berjalan(): void
+    {
+        Queue::fake();
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        SyncKimaiTimesheets::markPending($user);
+
+        Livewire::test(RiwayatSync::class)
+            ->assertActionDisabled('syncKimaiRentang')
+            ->callAction('syncKimaiRentang', data: ['dari' => '2026-09-01', 'sampai' => '2026-09-10']);
+
+        Queue::assertNothingPushed();
+    }
 }
