@@ -8,7 +8,9 @@ use App\Filament\Pages\Preferensi;
 use App\Jobs\SyncKimaiTimesheets;
 use App\Models\SyncRun;
 use App\Models\User;
+use Carbon\CarbonImmutable;
 use Filament\Actions\Action;
+use Filament\Forms\Components\DatePicker;
 use Filament\Notifications\Notification;
 use Filament\Support\Icons\Heroicon;
 use Illuminate\Support\Facades\Auth;
@@ -66,8 +68,49 @@ trait SyncsWithKimai
             ->action(fn () => $this->startKimaiSync());
     }
 
+    /**
+     * Sync ulang rentang pilihan user. Tombol biasa selalu mulai dari watermark,
+     * jadi timesheet yang baru diinput di Kimai setelah tanggalnya terlewati
+     * tidak akan pernah tertarik lagi tanpa ini. Aman diulang: dedup (SY-13)
+     * membuat entri yang sudah ada dilewati, bukan digandakan.
+     */
+    public function kimaiRangeSyncAction(): Action
+    {
+        $user = Auth::user();
+        $running = $user !== null && $user->hasKimaiConnection() && $this->kimaiSyncIsRunning($user);
+        $today = CarbonImmutable::now(config('kimai.timezone'))->startOfDay();
+
+        return Action::make('syncKimaiRentang')
+            ->label('Sync rentang…')
+            ->icon(Heroicon::OutlinedCalendarDays)
+            ->color('gray')
+            ->disabled($running)
+            ->visible(fn (): bool => $user?->hasKimaiConnection() ?? false)
+            ->modalHeading('Sync Kimai untuk rentang tertentu')
+            ->modalDescription('Tarik ulang timesheet Kimai di rentang ini. Lembur yang sudah ada tidak akan terduplikasi.')
+            ->modalSubmitActionLabel('Sync')
+            ->schema([
+                DatePicker::make('dari')
+                    ->label('Dari tanggal')
+                    ->default($today->subMonthNoOverflow()->startOfMonth()->toDateString())
+                    ->minDate($today->subDays((int) config('kimai.lookback_days'))->toDateString())
+                    ->maxDate($today->toDateString())
+                    ->required(),
+                DatePicker::make('sampai')
+                    ->label('Sampai tanggal')
+                    ->default($today->toDateString())
+                    ->maxDate($today->toDateString())
+                    ->afterOrEqual('dari')
+                    ->required(),
+            ])
+            ->action(fn (array $data) => $this->startKimaiSync(
+                CarbonImmutable::parse($data['dari'])->toDateString(),
+                CarbonImmutable::parse($data['sampai'])->toDateString(),
+            ));
+    }
+
     /** F-12 — respons < 300ms: hanya menaruh job ke queue, tidak menunggu Kimai. */
-    public function startKimaiSync(): void
+    public function startKimaiSync(?string $from = null, ?string $to = null): void
     {
         $user = Auth::user();
 
@@ -87,7 +130,7 @@ trait SyncsWithKimai
         }
 
         SyncKimaiTimesheets::markPending($user);
-        SyncKimaiTimesheets::dispatch($user);
+        SyncKimaiTimesheets::dispatch($user, $from, $to);
 
         // Run terakhir ditandai sudah dilihat, supaya notifikasi selesai nanti
         // benar-benar milik run yang baru ini.

@@ -44,7 +44,7 @@ class RiwayatSync extends Page implements HasTable
 
     protected function getHeaderActions(): array
     {
-        return [$this->kimaiSyncAction()];
+        return [$this->kimaiRangeSyncAction(), $this->kimaiSyncAction()];
     }
 
     public function table(Table $table): Table

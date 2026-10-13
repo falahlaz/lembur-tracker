@@ -47,6 +47,39 @@ class SyncRangeResolver
         return new SyncRange(begin: $begin, end: $now);
     }
 
+    /**
+     * Rentang yang dipilih user sendiri dari Riwayat Sync — jalan keluar untuk
+     * timesheet yang baru diinput di Kimai setelah watermark melewati tanggalnya.
+     *
+     * Sengaja hanya dipagari batas keras `lookback_days`, bukan awal periode
+     * payroll: yang dicari justru lembur periode lalu yang tertinggal. Tanggal
+     * ditafsirkan di zona waktu Kimai, sama seperti rentang otomatis.
+     */
+    public function custom(CarbonImmutable $from, CarbonImmutable $to, ?CarbonImmutable $now = null): SyncRange
+    {
+        $now = $now ?? CarbonImmutable::now(config('kimai.timezone'));
+        $tz = config('kimai.timezone');
+
+        $begin = CarbonImmutable::parse($from->toDateString(), $tz)->startOfDay();
+        $end = CarbonImmutable::parse($to->toDateString(), $tz)->endOfDay();
+
+        $hardFloor = $this->hardFloor($now);
+
+        if ($begin->lt($hardFloor)) {
+            $begin = $hardFloor;
+        }
+
+        if ($end->gt($now)) {
+            $end = $now;
+        }
+
+        if ($end->lt($begin)) {
+            $end = $begin->endOfDay()->min($now);
+        }
+
+        return new SyncRange(begin: $begin, end: $end);
+    }
+
     /** Batas mundur maksimum: yang paling belakangan di antara dua pagar. */
     private function floor(User $user, CarbonImmutable $now): CarbonImmutable
     {
@@ -54,8 +87,13 @@ class SyncRangeResolver
             ->setTimezone(config('kimai.timezone'))
             ->startOfDay();
 
-        $hardFloor = $now->subDays((int) config('kimai.lookback_days'))->startOfDay();
+        $hardFloor = $this->hardFloor($now);
 
         return $periodStart->gt($hardFloor) ? $periodStart : $hardFloor;
+    }
+
+    private function hardFloor(CarbonImmutable $now): CarbonImmutable
+    {
+        return $now->subDays((int) config('kimai.lookback_days'))->startOfDay();
     }
 }

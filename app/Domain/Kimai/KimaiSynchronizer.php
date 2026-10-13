@@ -36,9 +36,15 @@ class KimaiSynchronizer
         private readonly BalanceMaintenance $maintenance,
     ) {}
 
-    public function run(User $user, SyncTrigger $trigger = SyncTrigger::Manual): SyncRun
+    /**
+     * `$range` diisi hanya untuk sync rentang pilihan user. Run seperti itu tidak
+     * menyentuh watermark: rentang lama tidak boleh memundurkannya, dan rentang
+     * yang melompat ke depan tidak boleh membuat hari di antaranya terlewati.
+     */
+    public function run(User $user, SyncTrigger $trigger = SyncTrigger::Manual, ?SyncRange $range = null): SyncRun
     {
-        $range = $this->ranges->for($user);
+        $custom = $range !== null;
+        $range = $range ?? $this->ranges->for($user);
 
         $run = SyncRun::query()->create([
             'user_id' => $user->id,
@@ -84,7 +90,10 @@ class KimaiSynchronizer
         // Watermark hanya bergerak setelah seluruh entri diproses. Kalau job mati
         // di tengah jalan, rentang yang sama ditarik ulang pada run berikutnya —
         // aman karena dedup (SY-13) membuatnya idempoten.
-        $user->kimai_synced_through = $range->end->toDateString();
+        if (! $custom) {
+            $user->kimai_synced_through = $range->end->toDateString();
+        }
+
         $user->kimai_token_valid_at = now();
         $user->save();
 
