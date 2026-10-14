@@ -9,6 +9,7 @@ use App\Enums\UploadStatus;
 use App\Jobs\PostTimesheetUpload;
 use App\Models\TimesheetUpload;
 use App\Models\TimesheetUploadEntry;
+use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -124,6 +125,30 @@ trait PreviewsTimesheetUpload
         unset($this->uploadSaatIni, $this->entries);
 
         Notification::make()->success()->title("{$jumlah} entri bentrok ikut dikirim")->send();
+    }
+
+    /**
+     * Tombol Batalkan di pratinjau, dengan konfirmasi.
+     *
+     * Dulu `wire:click="batalkan"` langsung: satu klik yang meleset, dan seluruh
+     * isian yang diketik satu per satu hilang dari layar. Labelnya mengikuti
+     * keadaan upload — yang berhenti di tengah tidak "dibatalkan", pratinjaunya
+     * saja yang dibuang.
+     */
+    public function batalkanAction(): Action
+    {
+        $draf = fn (): bool => $this->uploadSaatIni()?->status === UploadStatus::Draft;
+
+        return Action::make('batalkan')
+            ->label(fn (): string => $draf() ? 'Batalkan' : 'Buang pratinjau ini')
+            ->color('gray')
+            ->requiresConfirmation()
+            ->modalIcon('heroicon-o-exclamation-triangle')
+            ->modalHeading(fn (): string => $draf() ? 'Batalkan pratinjau ini?' : 'Buang pratinjau ini?')
+            ->modalDescription(fn (): string => $this->keteranganBatal())
+            ->modalSubmitActionLabel(fn (): string => $draf() ? 'Ya, batalkan' : 'Ya, buang')
+            ->modalCancelActionLabel('Kembali')
+            ->action(fn () => $this->batalkan());
     }
 
     /**
@@ -420,6 +445,21 @@ trait PreviewsTimesheetUpload
 
     /** Dipanggil begitu upload tuntas dan pratinjaunya diganti panel hasil. */
     protected function setelahSukses(): void {}
+
+    /** Kalimat di modal konfirmasi Batalkan. */
+    protected function keteranganBatal(): string
+    {
+        return 'Entri di pratinjau ini tidak akan dikirim ke Kimai. Untuk mengirimnya lagi, berkasnya harus diperiksa ulang.';
+    }
+
+    /**
+     * Apakah upload di Riwayat upload punya tombol "Pulihkan". Bawaannya tidak:
+     * hanya halaman yang tahu cara mengembalikan entri ke bentuk masukannya.
+     */
+    public function bisaDipulihkan(TimesheetUpload $upload): bool
+    {
+        return false;
+    }
 
     /** "berkasnya" / "isiannya" — untuk pesan "periksa … sekali lagi". */
     protected function objekPeriksa(): string
