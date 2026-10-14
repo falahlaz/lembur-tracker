@@ -254,4 +254,92 @@ class IsiTimesheetPageTest extends TestCase
             ->assertSee('09:00–11:00 (2j)')
             ->assertSee('22:00–24:00 (2j) · 31_DEV_FEATURE · Lembur');
     }
+
+    #[Test]
+    public function batalkan_menunggu_konfirmasi_sebelum_membuang_draf(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $halaman = $this->halaman([$this->baris('2026-09-22')])->call('periksa');
+        $upload = TimesheetUpload::query()->sole();
+
+        // Klik pertama hanya membuka modal; belum ada yang dibatalkan.
+        $halaman->mountAction('batalkan')->assertActionMounted('batalkan');
+        $this->assertSame(UploadStatus::Draft, $upload->refresh()->status);
+
+        $halaman->callMountedAction()->assertSet('uploadId', null);
+        $this->assertSame(UploadStatus::Cancelled, $upload->refresh()->status);
+    }
+
+    #[Test]
+    public function isian_yang_dibatalkan_bisa_dipulihkan_ke_form_apa_adanya(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $awal = [
+            $this->baris('2026-09-22', '09:00', '18:00'),
+            $this->baris('2026-09-22', '19:00', '00:00', ['lembur' => true, 'deskripsi' => "Hotfix rilis\nmalam"]),
+            $this->baris('2026-09-23', '13:30', '15:15', ['deskripsi' => 'Rapat sprint']),
+        ];
+
+        $halaman = $this->halaman($awal)->call('periksa')->callAction('batalkan');
+        $upload = TimesheetUpload::query()->sole();
+        $this->assertSame(UploadStatus::Cancelled, $upload->status);
+
+        $halaman
+            ->assertSee('Pulihkan')
+            ->set('data.rows', ['kosong' => $this->baris('2026-09-24', '09:00', '10:00', ['deskripsi' => null])])
+            ->callAction('pulihkan', arguments: ['upload' => $upload->id])
+            ->assertSet('data.project_id', 105)
+            ->assertNotified('3 baris dipulihkan ke form');
+
+        $rows = array_values($halaman->get('data.rows'));
+
+        $this->assertCount(3, $rows);
+        $this->assertSame(
+            [
+                ['2026-09-22', '09:00', '18:00', '9:00', 8, 'Development fitur A', false],
+                ['2026-09-22', '19:00', '00:00', '5:00', 8, "Hotfix rilis\nmalam", true],
+                ['2026-09-23', '13:30', '15:15', '1:45', 8, 'Rapat sprint', false],
+            ],
+            array_map(fn (array $r) => [
+                $r['tanggal'], $r['mulai'], $r['selesai'], $r['durasi'], (int) $r['activity_id'], $r['deskripsi'], $r['lembur'],
+            ], $rows),
+        );
+
+        // Periksa ulang menghasilkan entri yang sama persis dengan draf yang dibatalkan.
+        $halaman->call('periksa')->assertHasNoErrors();
+        $baru = TimesheetUpload::query()->latest('id')->first();
+
+        $this->assertNotSame($upload->id, $baru->id);
+        $this->assertSame($upload->count_parsed, $baru->count_parsed);
+    }
+
+    #[Test]
+    public function pulihkan_hanya_untuk_isian_sendiri_yang_dibatalkan(): void
+    {
+        $orangLain = $this->kimaiUser(token: 'tok-lain-cd34');
+        $milikOrangLain = app(UploadDrafter::class)->draftManual($orangLain, [$this->baris('2026-09-22')], 105);
+        app(UploadDrafter::class)->cancel($milikOrangLain);
+
+        $user = $this->kimaiUser();
+        $this->actingAs($user);
+
+        $draf = app(UploadDrafter::class)->draftManual($user, [$this->baris('2026-09-23')], 105);
+        $workbook = TimesheetUpload::query()->create([
+            'user_id' => $user->id,
+            'source' => TimesheetUpload::SOURCE_WORKBOOK,
+            'original_filename' => 'Timesheet.xlsx',
+            'status' => UploadStatus::Cancelled->value,
+        ])->refresh();
+
+        $halaman = $this->halaman([$this->baris('2026-09-24', '09:00', '10:00', ['deskripsi' => 'Tetap di sini'])]);
+
+        foreach ([$milikOrangLain, $draf, $workbook] as $upload) {
+            $halaman->callAction('pulihkan', arguments: ['upload' => $upload->id])
+                ->assertNotified('Isian ini tidak bisa dipulihkan');
+
+            $this->assertSame('Tetap di sini', $halaman->get('data.rows.baris-0.deskripsi'));
+        }
+    }
 }

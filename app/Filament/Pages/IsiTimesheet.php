@@ -7,6 +7,7 @@ use App\Domain\Timesheet\Exceptions\InvalidManualInput;
 use App\Domain\Timesheet\KimaiCatalog;
 use App\Domain\Timesheet\ManualEntryBuilder;
 use App\Domain\Timesheet\UploadDrafter;
+use App\Enums\UploadStatus;
 use App\Filament\Concerns\PicksKimaiProject;
 use App\Filament\Concerns\PreviewsTimesheetUpload;
 use App\Models\TimesheetUpload;
@@ -576,6 +577,86 @@ class IsiTimesheet extends Page implements HasSchemas
     protected function objekPeriksa(): string
     {
         return 'isiannya';
+    }
+
+    protected function keteranganBatal(): string
+    {
+        return 'Entri di pratinjau ini tidak akan dikirim ke Kimai. Isiannya masih bisa dikembalikan ke form '
+            .'lewat tombol "Pulihkan" di Riwayat upload.';
+    }
+
+    /** Hanya isian form yang dibatalkan: entri workbook dikembalikan dengan mengunggah berkasnya lagi. */
+    public function bisaDipulihkan(TimesheetUpload $upload): bool
+    {
+        return $upload->source === TimesheetUpload::SOURCE_FORM
+            && $upload->status === UploadStatus::Cancelled;
+    }
+
+    /**
+     * Mengembalikan isian yang dibatalkan ke form, supaya tidak perlu diketik ulang.
+     *
+     * Sengaja mengisi FORM, bukan menghidupkan draf lamanya: sejak dibatalkan,
+     * sebagian jamnya bisa saja sudah diisi langsung di Kimai, dan hanya Periksa
+     * ulang yang menjalankan pemeriksaan duplikat yang segar. Riwayatnya juga tetap
+     * jujur — yang dibatalkan tetap tercatat dibatalkan.
+     */
+    public function pulihkanAction(): Action
+    {
+        return Action::make('pulihkan')
+            ->label('Pulihkan')
+            ->icon(Heroicon::OutlinedArrowUturnLeft)
+            ->link()
+            ->size('sm')
+            // Konfirmasi hanya kalau ada isian yang akan tertimpa.
+            ->requiresConfirmation(fn (): bool => $this->formSudahDiisi())
+            ->modalHeading('Ganti isian sekarang?')
+            ->modalDescription('Baris yang sedang diisi di form akan diganti dengan isian dari riwayat ini.')
+            ->modalSubmitActionLabel('Ya, pulihkan')
+            ->action(function (array $arguments): void {
+                $upload = TimesheetUpload::query()
+                    ->where('user_id', Auth::id())
+                    ->find((int) ($arguments['upload'] ?? 0));
+
+                if ($upload === null || ! $this->bisaDipulihkan($upload)) {
+                    Notification::make()->warning()->title('Isian ini tidak bisa dipulihkan')
+                        ->body('Hanya isian dari halaman ini yang dibatalkan yang bisa dikembalikan ke form.')->send();
+
+                    return;
+                }
+
+                $rows = app(ManualEntryBuilder::class)->rowsFromUpload($upload);
+
+                if ($rows === []) {
+                    Notification::make()->warning()->title('Tidak ada baris yang bisa dipulihkan')->send();
+
+                    return;
+                }
+
+                $this->hasilId = null;
+                unset($this->hasilSelesai);
+
+                $this->form->fill([
+                    'project_id' => $upload->project_id ?: ($this->data['project_id'] ?? (int) config('kimai.default_project')),
+                    'rows' => $rows,
+                ]);
+
+                Notification::make()->success()
+                    ->title(count($rows).' baris dipulihkan ke form')
+                    ->body('Periksa isiannya lagi, lalu kirim.')
+                    ->send();
+            });
+    }
+
+    /** Ada baris yang deskripsinya sudah diketik — tanda isian yang sayang untuk ditimpa. */
+    private function formSudahDiisi(): bool
+    {
+        foreach ($this->data['rows'] ?? [] as $row) {
+            if (filled($row['deskripsi'] ?? null)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Isian yang sudah terkirim dikosongkan; project-nya dibiarkan untuk isian berikutnya. */

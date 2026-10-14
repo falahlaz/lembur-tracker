@@ -170,11 +170,11 @@
                          upload yang nyangkut di `queued` tidak punya tombol apa pun:
                          Kirim mati karena $berjalan, Batalkan hilang karena statusnya
                          bukan Draft. Sekarang selalu ada jalan keluar; yang benar-benar
-                         sedang berjalan ditolak di batalkan() dengan notifikasi. --}}
+                         sedang berjalan ditolak di batalkan() dengan notifikasi.
+                         Lewat action berkonfirmasi: satu klik yang meleset dulu
+                         langsung membuang seluruh isian. --}}
                     @if (! in_array($upload->status, [UploadStatus::Success, UploadStatus::Cancelled], true))
-                        <x-filament::button type="button" color="gray" wire:click="batalkan">
-                            {{ $upload->status === UploadStatus::Draft ? 'Batalkan' : 'Buang pratinjau ini' }}
-                        </x-filament::button>
+                        {{ $this->batalkanAction }}
                     @endif
                 </div>
 
@@ -230,6 +230,9 @@
                         <div class="flex items-center gap-3">
                             <span class="text-gray-600 dark:text-gray-400">{{ $lama->summary() }}</span>
                             <x-filament::badge :color="$lama->status->getColor()">{{ $lama->status->getLabel() }}</x-filament::badge>
+                            @if ($this->bisaDipulihkan($lama))
+                                {{ ($this->pulihkanAction)(['upload' => $lama->id]) }}
+                            @endif
                         </div>
                     </div>
                 @endforeach

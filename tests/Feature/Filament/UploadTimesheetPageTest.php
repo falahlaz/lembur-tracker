@@ -236,6 +236,21 @@ class UploadTimesheetPageTest extends TestCase
     }
 
     #[Test]
+    public function upload_workbook_yang_dibatalkan_tidak_punya_tombol_pulihkan(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        Livewire::test(UploadTimesheet::class)
+            ->set('data.berkas', $this->berkas())
+            ->call('analyse')
+            ->callAction('batalkan')
+            ->assertSee('Dibatalkan')
+            ->assertDontSee('Pulihkan');
+
+        $this->assertSame(UploadStatus::Cancelled, TimesheetUpload::query()->firstOrFail()->status);
+    }
+
+    #[Test]
     public function project_dipilih_lewat_nama_bukan_angka(): void
     {
         $this->actingAs($this->kimaiUser());

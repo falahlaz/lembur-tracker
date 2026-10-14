@@ -3,7 +3,9 @@
 namespace App\Domain\Timesheet;
 
 use App\Domain\Timesheet\Exceptions\InvalidManualInput;
+use App\Models\TimesheetUpload;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -198,6 +200,61 @@ class ManualEntryBuilder
         }
 
         return $out;
+    }
+
+    /**
+     * Kebalikan split(): entri sebuah upload isian dikembalikan menjadi baris form.
+     *
+     * Bisa lossless karena split() meninggalkan jejaknya di setiap potongan —
+     * cell_ref "Baris N (k/m)" menyebut baris asalnya, sheet Overtime/Daily adalah
+     * toggle Lembur, dan jam mulai/selesai barisnya tinggal awal potongan pertama
+     * dan akhir potongan terakhir. Tidak ada kolom tambahan yang perlu disimpan,
+     * sehingga upload yang dibatalkan SEBELUM fitur pulihkan ada pun ikut bisa
+     * dipulihkan.
+     *
+     * Entri berstatus apa pun ikut: baris yang dulu dilewati karena duplikat tetap
+     * bagian dari isian orangnya, dan Periksa ulang yang memutuskan nasibnya.
+     *
+     * @return array<string, array<string, mixed>> state repeater, berkunci uuid
+     */
+    public function rowsFromUpload(TimesheetUpload $upload): array
+    {
+        $zone = config('kimai.timezone');
+        $perBaris = [];
+
+        foreach ($upload->entries()->orderBy('begin_at')->orderBy('id')->get() as $entry) {
+            if (preg_match('/^Baris (\d+)/', (string) $entry->cell_ref, $m) !== 1) {
+                continue;
+            }
+
+            $perBaris[(int) $m[1]][] = $entry;
+        }
+
+        ksort($perBaris);
+
+        $rows = [];
+
+        foreach ($perBaris as $potongan) {
+            $pertama = $potongan[0];
+            $terakhir = end($potongan);
+
+            $tanggal = CarbonImmutable::parse($pertama->work_date->toDateString(), $zone);
+            $mulai = (int) $tanggal->diffInMinutes($pertama->begin_at, true);
+            $selesai = (int) $tanggal->diffInMinutes($terakhir->end_at, true);
+
+            $rows[(string) Str::uuid()] = [
+                'tanggal' => $tanggal->toDateString(),
+                'mulai' => sprintf('%02d:%02d', intdiv($mulai, 60), $mulai % 60),
+                'durasi' => sprintf('%d:%02d', intdiv($selesai - $mulai, 60), ($selesai - $mulai) % 60),
+                // Tengah malam ditulis 00:00; minuteOfDay(asEnd) membacanya kembali sebagai 24:00.
+                'selesai' => sprintf('%02d:%02d', intdiv($selesai, 60) % 24, $selesai % 60),
+                'activity_id' => $pertama->activity_id,
+                'deskripsi' => $pertama->description,
+                'lembur' => $pertama->sheet === 'Overtime',
+            ];
+        }
+
+        return $rows;
     }
 
     /** Sama dengan TimesheetWorkbookParser: tag yang ditarik kembali oleh sync. */
