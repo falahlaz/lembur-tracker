@@ -28,7 +28,7 @@ RUN npm run build \
     && grep -rq filepond public/build/assets
 
 # ---------- Tahap 3: runtime ----------
-FROM php:8.4-fpm-alpine AS runtime
+FROM php:8.4.27-fpm-alpine AS runtime
 
 RUN apk add --no-cache \
         icu-libs libzip \
