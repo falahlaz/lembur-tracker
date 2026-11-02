@@ -100,6 +100,7 @@ class SessionWriter
         // atau kunci grup yang sama dengan salah satu donor, dan
         // unique(user_id, overtime_date, start_time) akan menolaknya.
         $this->releaseDonors($donors);
+        $this->releaseTrashedHolders($user, $merged);
 
         return $existing === null
             ? $this->createFrom($user, $merged, $claimedElsewhere)
@@ -180,6 +181,35 @@ class SessionWriter
             $donor->kimaiEntries()->delete();
             $donor->forceDelete();
         }
+    }
+
+    /**
+     * Record yang sudah dihapus user (soft delete) tidak ikut dicek findClash(),
+     * tetapi barisnya masih memegang unique(user_id, overtime_date, start_time) dan
+     * unique(user_id, kimai_group_key) — index MySQL tidak mengenal `deleted_at`.
+     * Tanpa ini, lembur manual yang dibuat lalu dihapus akan menggagalkan sync Kimai
+     * di slot yang sama dengan "Duplicate entry".
+     *
+     * Dihapus permanen dengan alasan yang sama seperti releaseDonors(): user sudah
+     * membuangnya, dan jejaknya tetap ada di log aktivitas.
+     */
+    private function releaseTrashedHolders(User $user, OvertimeSession $session): void
+    {
+        $startTime = substr($session->startTime(), 0, 5);
+
+        OvertimeRecord::onlyTrashed()
+            ->where('user_id', $user->id)
+            ->where(fn ($q) => $q
+                ->whereDate('overtime_date', $session->anchorDate->toDateString())
+                ->orWhere('kimai_group_key', $session->groupKey))
+            ->get()
+            ->filter(fn (OvertimeRecord $r) => $r->kimai_group_key === $session->groupKey
+                || ($r->overtime_date->toDateString() === $session->anchorDate->toDateString()
+                    && substr((string) $r->start_time, 0, 5) === $startTime))
+            ->each(function (OvertimeRecord $r): void {
+                $r->kimaiEntries()->delete();
+                $r->forceDelete();
+            });
     }
 
     /**
