@@ -805,6 +805,26 @@ class KimaiSyncTest extends TestCase
     }
 
     #[Test]
+    public function sy_15_record_manual_yang_sudah_dihapus_tidak_menghalangi_sync(): void
+    {
+        $user = $this->kimaiUser();
+        $deleted = $this->logOvertime($user, self::WEDNESDAY, '18:00', '22:00');
+        $deleted->delete();
+
+        $this->fakeKimai([
+            $this->kimaiSlot(1, self::WEDNESDAY, '18:00', '20:00'),
+            $this->kimaiSlot(2, self::WEDNESDAY, '20:00', '22:00'),
+        ]);
+        $run = $this->sync($user);
+
+        $this->assertSame(SyncStatus::Success, $run->status);
+        $this->assertSame(2, $run->items()->where('action', SyncAction::Created)->count());
+        $this->assertSame(1, OvertimeRecord::count());
+        $this->assertSame(Source::Kimai, OvertimeRecord::first()->source);
+        $this->assertNull(OvertimeRecord::withTrashed()->find($deleted->id));
+    }
+
+    #[Test]
     public function sy_14_perubahan_lokal_membekukan_seluruh_sesi(): void
     {
         $user = $this->kimaiUser();
