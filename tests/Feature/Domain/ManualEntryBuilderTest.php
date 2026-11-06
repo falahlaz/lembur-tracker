@@ -236,4 +236,48 @@ class ManualEntryBuilderTest extends TestCase
             $this->assertStringContainsString('Baris 2 bertumpukan jamnya dengan baris 1', $e->problems[0]);
         }
     }
+
+    #[Test]
+    public function baris_lembur_tidak_melewati_istirahat(): void
+    {
+        $daily = (new ManualEntryBuilder)->build([$this->baris(['mulai' => '09:00', 'selesai' => '17:00'])], 105);
+        $lembur = (new ManualEntryBuilder)->build([$this->baris(['mulai' => '09:00', 'selesai' => '17:00', 'lembur' => true])], 105);
+
+        // Daily: 12:00–13:00 dilewati. Lembur: jam nyata, dipecah hanya karena batas 4 jam.
+        $this->assertSame(['09:00–12:00', '13:00–17:00'], $this->jam($daily->entries));
+        $this->assertSame(['09:00–13:00', '13:00–17:00'], $this->jam($lembur->entries));
+        $this->assertSame(420, $daily->totalMinutes());
+        $this->assertSame(480, $lembur->totalMinutes());
+    }
+
+    #[Test]
+    public function baris_lembur_yang_seluruhnya_di_jam_istirahat_sah(): void
+    {
+        $book = (new ManualEntryBuilder)->build([$this->baris(['mulai' => '12:00', 'selesai' => '13:00', 'lembur' => true])], 105);
+
+        $this->assertSame(['12:00–13:00'], $this->jam($book->entries));
+    }
+
+    #[Test]
+    public function durasi_lembur_adalah_jam_nyata(): void
+    {
+        $this->assertSame(1020, ManualEntryBuilder::selesaiDariDurasi(540, 480, istirahat: false));
+        $this->assertSame(480, ManualEntryBuilder::netMinutes(540, 1020, istirahat: false));
+        // Daily dengan jam yang sama kehilangan satu jam istirahat.
+        $this->assertSame(420, ManualEntryBuilder::netMinutes(540, 1020));
+    }
+
+    #[Test]
+    public function lembur_lewat_malam_tidak_memotong_istirahat_di_siang_hari_kedua(): void
+    {
+        // 22:00 sampai 14:00 esok harinya. 12:00–13:00 hari kedua = menit 2160–2220.
+        $lembur = ManualEntryBuilder::chunks(1320, 2280, istirahat: false);
+        $daily = ManualEntryBuilder::chunks(1320, 2280);
+
+        $this->assertSame([[1320, 1440], [1440, 1680], [1680, 1920], [1920, 2160], [2160, 2280]], $lembur);
+        $this->assertSame(960, ManualEntryBuilder::netMinutes(1320, 2280, istirahat: false));
+
+        // Baris Daily dengan jam yang sama memang melewati 12:00–13:00 hari kedua.
+        $this->assertSame([[1320, 1440], [1440, 1680], [1680, 1920], [1920, 2160], [2220, 2280]], $daily);
+    }
 }

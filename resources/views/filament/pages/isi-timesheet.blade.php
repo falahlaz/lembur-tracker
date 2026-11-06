@@ -15,8 +15,9 @@
         <x-slot name="description">
             Isi jam mulai dan durasi jam kerjanya, misalnya 09:00 selama 8 jam. Kimai hanya
             menerima entri maksimal 4 jam, jadi setiap baris dipecah otomatis menjadi potongan
-            maksimal 4 jam. Istirahat 12:00–13:00 dilewati dan tidak dihitung ke durasi, jadi
-            09:00 selama 8 jam berakhir 18:00. Lembur lewat tengah malam cukup ditulis satu baris:
+            maksimal 4 jam. Untuk baris biasa, istirahat 12:00–13:00 dilewati dan tidak dihitung ke
+            durasi, jadi 09:00 selama 8 jam berakhir 18:00. Baris Lembur dihitung dari jam yang
+            benar-benar dikerjakan, tanpa potongan istirahat: 09:00 selama 8 jam berakhir 17:00. Lembur lewat tengah malam cukup ditulis satu baris:
             Mulai 22:00 dengan Selesai 06:00 (atau Durasi 8:00) berarti sampai pagi hari berikutnya,
             dan dipecah otomatis di tengah malam. Pakai "Salin ke rentang tanggal" untuk mengisi
             banyak hari sekaligus.

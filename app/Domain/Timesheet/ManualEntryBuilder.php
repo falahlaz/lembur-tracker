@@ -116,9 +116,12 @@ class ManualEntryBuilder
      * ini hidup — build(), ringkasan, dan form semua memakainya, sehingga angkanya
      * tidak bisa berbeda dari entri yang benar-benar terkirim.
      *
+     * `$istirahat` false untuk baris Lembur: lembur dihitung dari jam yang benar-benar
+     * dikerjakan, jadi jam 12:00–13:00 tidak dibuang. Hanya baris Daily yang melewatinya.
+     *
      * @return array<int, array{0: int, 1: int}>
      */
-    public static function chunks(int $mulai, int $selesai): array
+    public static function chunks(int $mulai, int $selesai, bool $istirahat = true): array
     {
         $out = [];
 
@@ -126,10 +129,9 @@ class ManualEntryBuilder
             $a = max($mulai, $awalHari);
             $b = min($selesai, $awalHari + 1440);
 
-            $bagian = [
-                [$a, min($b, $awalHari + self::BREAK_START)],
-                [max($a, $awalHari + self::BREAK_END), $b],
-            ];
+            $bagian = $istirahat
+                ? [[$a, min($b, $awalHari + self::BREAK_START)], [max($a, $awalHari + self::BREAK_END), $b]]
+                : [[$a, $b]];
 
             foreach ($bagian as [$dari, $sampai]) {
                 for (; $dari < $sampai; $dari += self::MAX_MINUTES) {
@@ -141,10 +143,10 @@ class ManualEntryBuilder
         return $out;
     }
 
-    /** Jam kerja bersih (menit) dari rentang jam dinding: selisihnya dikurangi istirahat. */
-    public static function netMinutes(int $mulai, int $selesai): int
+    /** Jam kerja (menit) dari rentang jam dinding: selisihnya, dikurangi istirahat kalau berlaku. */
+    public static function netMinutes(int $mulai, int $selesai, bool $istirahat = true): int
     {
-        return array_sum(array_map(fn (array $c) => $c[1] - $c[0], self::chunks($mulai, $selesai)));
+        return array_sum(array_map(fn (array $c) => $c[1] - $c[0], self::chunks($mulai, $selesai, $istirahat)));
     }
 
     /**
@@ -152,8 +154,12 @@ class ManualEntryBuilder
      * bersih tertentu, istirahat tiap hari dilewati. Boleh melewati tengah malam,
      * dibatasi MAX_OVERNIGHT_MINUTES dari jam mulai.
      */
-    public static function selesaiDariDurasi(int $mulai, int $durasi): int
+    public static function selesaiDariDurasi(int $mulai, int $durasi, bool $istirahat = true): int
     {
+        if (! $istirahat) {
+            return min($mulai + $durasi, $mulai + self::MAX_OVERNIGHT_MINUTES);
+        }
+
         $posisi = $mulai;
         $sisa = $durasi;
 
@@ -247,7 +253,7 @@ class ManualEntryBuilder
             $problems[] = "Baris {$nomor}: jam mulai dan selesai harus diisi.";
         } elseif (($selesai = self::akhirMutlak($mulai, $selesai)) === null) {
             $problems[] = "Baris {$nomor}: jam selesai harus setelah jam mulai.";
-        } elseif (self::chunks($mulai, $selesai) === []) {
+        } elseif (self::chunks($mulai, $selesai, ! (bool) ($row['lembur'] ?? false)) === []) {
             $problems[] = "Baris {$nomor}: seluruhnya jam istirahat (12:00–13:00), tidak ada yang bisa dicatat.";
         }
 
@@ -273,7 +279,7 @@ class ManualEntryBuilder
         $tag = $lembur ? $this->overtimeTag() : null;
         $activityId = (int) $row['activity_id'];
 
-        $potongan = self::chunks($mulai, $selesai);
+        $potongan = self::chunks($mulai, $selesai, ! $lembur);
         $bagian = count($potongan);
         $out = [];
 

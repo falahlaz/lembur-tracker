@@ -292,6 +292,42 @@ class IsiTimesheetPageTest extends TestCase
     }
 
     #[Test]
+    public function toggle_lembur_menghitung_ulang_durasi_tanpa_istirahat(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $halaman = $this->halaman([$this->baris('2026-09-26', '09:00', '17:00')])
+            ->set('data.rows.baris-0.durasi', '7:00')
+            ->assertSet('data.rows.baris-0.selesai', '17:00')
+            ->set('data.rows.baris-0.lembur', true)
+            ->assertSet('data.rows.baris-0.selesai', '17:00')
+            ->assertSet('data.rows.baris-0.durasi', '8:00');
+
+        // Lembur: durasi 9:00 dari 09:00 berakhir 18:00, tanpa potongan istirahat.
+        $halaman->set('data.rows.baris-0.durasi', '9:00')->assertSet('data.rows.baris-0.selesai', '18:00');
+    }
+
+    #[Test]
+    public function pemulihan_isian_lembur_mengembalikan_durasi_jam_nyata(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $halaman = $this->halaman([
+            $this->baris('2026-09-26', '09:00', '17:00', ['lembur' => true]),
+            $this->baris('2026-09-28', '09:00', '17:00'),
+        ])->call('periksa')->callAction('batalkan');
+
+        $upload = TimesheetUpload::query()->sole();
+
+        $halaman->callAction('pulihkan', arguments: ['upload' => $upload->id]);
+        $rows = array_values($halaman->get('data.rows'));
+
+        // Lembur: selisih jam dinding (8 jam). Daily: jam kerja bersih (7 jam, istirahat dilewati).
+        $this->assertSame(['17:00', '8:00', true], [$rows[0]['selesai'], $rows[0]['durasi'], $rows[0]['lembur']]);
+        $this->assertSame(['17:00', '7:00', false], [$rows[1]['selesai'], $rows[1]['durasi'], $rows[1]['lembur']]);
+    }
+
+    #[Test]
     public function judul_kartu_merangkum_isi_baris(): void
     {
         $this->actingAs($this->kimaiUser());
