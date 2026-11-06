@@ -38,10 +38,10 @@ use Illuminate\Support\Str;
 /**
  * Mengisi timesheet Kimai untuk satu hari atau lebih sekaligus, langsung dari form.
  *
- * Kimai menolak entri yang lebih dari 2 jam, sehingga satu hari kerja berarti
+ * Kimai menolak entri yang lebih dari 4 jam, sehingga satu hari kerja berarti
  * empat sampai lima kali mengisi form Kimai — dan berlipat kalau beberapa hari
  * terlewat. Di sini orang menulis bloknya apa adanya ("09:00–18:00, Development"),
- * ManualEntryBuilder memecahnya menjadi potongan ≤ 2 jam, lalu seluruh alur
+ * ManualEntryBuilder memecahnya menjadi potongan ≤ 4 jam (istirahat 12:00–13:00 dilewati), lalu seluruh alur
  * sesudahnya — pemeriksaan duplikat, pratinjau, pengiriman lewat queue — sama
  * persis dengan Upload Timesheet (PreviewsTimesheetUpload).
  *
@@ -175,6 +175,9 @@ class IsiTimesheet extends Page implements HasSchemas
                             ->label('Lembur')
                             ->inline(false)
                             ->live()
+                            // Istirahat hanya dilewati untuk baris Daily, jadi Durasi harus
+                            // dihitung ulang saat toggle berganti; Mulai dan Selesai dipertahankan.
+                            ->afterStateUpdated(fn (Get $get, Set $set) => $this->isiDurasiDariSelesai($get, $set))
                             ->columnSpan(['default' => 12, 'lg' => 2]),
                     ])
                     // Judul kartu merangkum isinya, supaya kartu yang dilipat tetap
@@ -348,7 +351,9 @@ class IsiTimesheet extends Page implements HasSchemas
             $mulai = ManualEntryBuilder::minuteOfDay($row['mulai'] ?? null);
             $selesai = ManualEntryBuilder::minuteOfDay($row['selesai'] ?? null, asEnd: true);
 
-            if (blank($row['tanggal'] ?? null) || $mulai === null || $selesai === null || $selesai <= $mulai) {
+            $selesai = $mulai === null || $selesai === null ? null : ManualEntryBuilder::akhirMutlak($mulai, $selesai);
+
+            if (blank($row['tanggal'] ?? null) || $mulai === null || $selesai === null) {
                 continue;
             }
 
@@ -359,11 +364,12 @@ class IsiTimesheet extends Page implements HasSchemas
             }
 
             $kunci = $tanggal->toDateString();
-            $menit = $selesai - $mulai;
+            $istirahat = ! ($row['lembur'] ?? false);
+            $menit = ManualEntryBuilder::netMinutes($mulai, $selesai, $istirahat);
 
             $out[$kunci] ??= ['label' => $tanggal->translatedFormat('D, j M'), 'menit' => 0, 'entri' => 0, 'menit_daily' => 0];
             $out[$kunci]['menit'] += $menit;
-            $out[$kunci]['entri'] += ManualEntryBuilder::pieces($menit);
+            $out[$kunci]['entri'] += count(ManualEntryBuilder::chunks($mulai, $selesai, $istirahat));
 
             if (! ($row['lembur'] ?? false)) {
                 $out[$kunci]['menit_daily'] += $menit;
@@ -449,8 +455,11 @@ class IsiTimesheet extends Page implements HasSchemas
         $mulai = ManualEntryBuilder::minuteOfDay($row['mulai'] ?? null);
         $selesai = ManualEntryBuilder::minuteOfDay($row['selesai'] ?? null, asEnd: true);
 
-        if ($mulai !== null && $selesai !== null && $selesai > $mulai) {
-            $bagian[] = sprintf('%s–%s (%s)', self::jamTeks($mulai), self::jamTeks($selesai), Format::durasiRingkas($selesai - $mulai));
+        $akhir = $mulai === null || $selesai === null ? null : ManualEntryBuilder::akhirMutlak($mulai, $selesai);
+
+        if ($akhir !== null) {
+            // Lewat tengah malam ditulis apa adanya (22:00–06:00), bukan 30:00.
+            $bagian[] = sprintf('%s–%s (%s)', self::jamTeks($mulai), self::jamTeks($akhir > 1440 ? $akhir - 1440 : $akhir), Format::durasiRingkas(ManualEntryBuilder::netMinutes($mulai, $akhir, ! ($row['lembur'] ?? false))));
         } elseif ($mulai !== null) {
             $bagian[] = 'mulai '.self::jamTeks($mulai);
         }
@@ -490,11 +499,13 @@ class IsiTimesheet extends Page implements HasSchemas
             return;
         }
 
-        // Tidak melewati tengah malam: 23:00 + 3 jam dipotong jadi 24:00.
-        $selesai = min(1440, $mulai + $durasi);
+        // Durasi = jam kerja bersih, jadi istirahat 12:00–13:00 ikut menggeser Selesai.
+        // Boleh lewat tengah malam: 22:00 + 8 jam menjadi 06:00 hari berikutnya.
+        $istirahat = ! $get('lembur');
+        $selesai = ManualEntryBuilder::selesaiDariDurasi($mulai, $durasi, $istirahat);
 
         $set('selesai', sprintf('%02d:%02d', intdiv($selesai, 60) % 24, $selesai % 60));
-        $set('durasi', self::tulisDurasi($selesai - $mulai));
+        $set('durasi', self::tulisDurasi(ManualEntryBuilder::netMinutes($mulai, $selesai, $istirahat)));
     }
 
     private function isiDurasiDariSelesai(Get $get, Set $set): void
@@ -502,9 +513,9 @@ class IsiTimesheet extends Page implements HasSchemas
         $mulai = ManualEntryBuilder::minuteOfDay($get('mulai'));
         $selesai = ManualEntryBuilder::minuteOfDay($get('selesai'), asEnd: true);
 
-        $set('durasi', $mulai !== null && $selesai !== null && $selesai > $mulai
-            ? self::tulisDurasi($selesai - $mulai)
-            : null);
+        $akhir = $mulai === null || $selesai === null ? null : ManualEntryBuilder::akhirMutlak($mulai, $selesai);
+
+        $set('durasi', $akhir !== null ? self::tulisDurasi(ManualEntryBuilder::netMinutes($mulai, $akhir, ! $get('lembur'))) : null);
     }
 
     /** "2:30" → 150, "8" → 480, "1.5" → 90. */

@@ -13,10 +13,14 @@
     <x-filament::section>
         <x-slot name="heading">Tulis pekerjaanmu</x-slot>
         <x-slot name="description">
-            Tulis blok waktunya apa adanya, misalnya 09:00–18:00. Kimai hanya menerima entri
-            maksimal 2 jam, jadi setiap baris dipecah otomatis menjadi potongan 2 jam dari jam
-            mulainya. Istirahat tidak dipotong otomatis; kalau mau dikosongkan, tulis sebagai
-            dua baris. Pakai "Salin ke rentang tanggal" untuk mengisi banyak hari sekaligus.
+            Isi jam mulai dan durasi jam kerjanya, misalnya 09:00 selama 8 jam. Kimai hanya
+            menerima entri maksimal 4 jam, jadi setiap baris dipecah otomatis menjadi potongan
+            maksimal 4 jam. Untuk baris biasa, istirahat 12:00–13:00 dilewati dan tidak dihitung ke
+            durasi, jadi 09:00 selama 8 jam berakhir 18:00. Baris Lembur dihitung dari jam yang
+            benar-benar dikerjakan, tanpa potongan istirahat: 09:00 selama 8 jam berakhir 17:00. Lembur lewat tengah malam cukup ditulis satu baris:
+            Mulai 22:00 dengan Selesai 06:00 (atau Durasi 8:00) berarti sampai pagi hari berikutnya,
+            dan dipecah otomatis di tengah malam. Pakai "Salin ke rentang tanggal" untuk mengisi
+            banyak hari sekaligus.
         </x-slot>
 
         @if ($this->katalogDariLokal())
