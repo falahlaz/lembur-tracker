@@ -36,6 +36,12 @@ class ManualEntryBuilder
     public const BREAK_END = 780;
 
     /**
+     * Rentang terpanjang satu baris yang boleh melewati tengah malam (16 jam).
+     * Pagar salah ketik: "09:00 sampai 08:00" jangan diam-diam jadi 23 jam.
+     */
+    public const MAX_OVERNIGHT_MINUTES = 960;
+
+    /**
      * @param  array<int|string, array<string, mixed>>  $rows  state repeater apa adanya
      * @param  array<int, string>  $activityNames  id => nama, untuk pratinjau
      *
@@ -45,8 +51,8 @@ class ManualEntryBuilder
     {
         $entries = [];
         $problems = [];
-        /** @var array<string, array<int, array{0: int, 1: int, 2: int}>> $perTanggal */
-        $perTanggal = [];
+        /** @var array<int, array{0: int, 1: int, 2: int}> $terpakai menit mutlak: awal, akhir, nomor baris */
+        $terpakai = [];
 
         foreach (array_values($rows) as $i => $row) {
             $nomor = $i + 1;
@@ -61,8 +67,13 @@ class ManualEntryBuilder
 
             // Bentrok di dalam isian ditolak, bukan dilewati: selain membingungkan,
             // dua potongan berjam sama melanggar unique index draf (tue_sel_unik).
-            foreach ($perTanggal[$tanggal->toDateString()] ?? [] as [$lainMulai, $lainSelesai, $lainNomor]) {
-                if ($mulai < $lainSelesai && $selesai > $lainMulai) {
+            // Dibandingkan dalam menit mutlak, bukan per tanggal: baris lembur yang
+            // lewat tengah malam menempati jam di tanggal berikutnya juga.
+            $awalMutlak = intdiv($tanggal->getTimestamp(), 60) + $mulai;
+            $akhirMutlak = intdiv($tanggal->getTimestamp(), 60) + $selesai;
+
+            foreach ($terpakai as [$lainAwal, $lainAkhir, $lainNomor]) {
+                if ($awalMutlak < $lainAkhir && $akhirMutlak > $lainAwal) {
                     $problems[] = "Baris {$nomor} bertumpukan jamnya dengan baris {$lainNomor} di "
                         .$tanggal->translatedFormat('j M').'.';
 
@@ -70,7 +81,7 @@ class ManualEntryBuilder
                 }
             }
 
-            $perTanggal[$tanggal->toDateString()][] = [$mulai, $selesai, $nomor];
+            $terpakai[] = [$awalMutlak, $akhirMutlak, $nomor];
 
             $entries = array_merge($entries, $this->split($row, $nomor, $tanggal, $mulai, $selesai, $activityNames));
         }
@@ -98,30 +109,32 @@ class ManualEntryBuilder
 
     /**
      * Potongan entri Kimai untuk rentang jam dinding, sebagai [dari, sampai] dalam
-     * menit sejak tengah malam: istirahat 12:00–13:00 dibuang, sisanya dipotong
-     * per MAX_MINUTES dari awal tiap bagian. Satu-satunya tempat aturan ini hidup —
-     * build(), ringkasan, dan form semua memakainya, sehingga angkanya tidak bisa
-     * berbeda dari entri yang benar-benar terkirim.
+     * menit sejak tengah malam TANGGAL BARIS (nilai di atas 1440 jatuh di hari
+     * berikutnya). Dipecah di tiap tengah malam supaya tidak ada entri yang
+     * menyeberang hari; istirahat 12:00–13:00 di tiap hari dibuang; sisanya
+     * dipotong per MAX_MINUTES dari awal tiap bagian. Satu-satunya tempat aturan
+     * ini hidup — build(), ringkasan, dan form semua memakainya, sehingga angkanya
+     * tidak bisa berbeda dari entri yang benar-benar terkirim.
      *
      * @return array<int, array{0: int, 1: int}>
      */
     public static function chunks(int $mulai, int $selesai): array
     {
-        $bagian = [];
-
-        if ($mulai < self::BREAK_START) {
-            $bagian[] = [$mulai, min($selesai, self::BREAK_START)];
-        }
-
-        if ($selesai > self::BREAK_END) {
-            $bagian[] = [max($mulai, self::BREAK_END), $selesai];
-        }
-
         $out = [];
 
-        foreach ($bagian as [$dari, $sampai]) {
-            for (; $dari < $sampai; $dari += self::MAX_MINUTES) {
-                $out[] = [$dari, min($sampai, $dari + self::MAX_MINUTES)];
+        for ($awalHari = intdiv($mulai, 1440) * 1440; $awalHari < $selesai; $awalHari += 1440) {
+            $a = max($mulai, $awalHari);
+            $b = min($selesai, $awalHari + 1440);
+
+            $bagian = [
+                [$a, min($b, $awalHari + self::BREAK_START)],
+                [max($a, $awalHari + self::BREAK_END), $b],
+            ];
+
+            foreach ($bagian as [$dari, $sampai]) {
+                for (; $dari < $sampai; $dari += self::MAX_MINUTES) {
+                    $out[] = [$dari, min($sampai, $dari + self::MAX_MINUTES)];
+                }
             }
         }
 
@@ -134,20 +147,52 @@ class ManualEntryBuilder
         return array_sum(array_map(fn (array $c) => $c[1] - $c[0], self::chunks($mulai, $selesai)));
     }
 
-    /** Kebalikan netMinutes(): jam selesai untuk jam kerja bersih tertentu, istirahat dilewati. Maksimal 24:00. */
+    /**
+     * Jam selesai (menit mutlak dari tengah malam tanggal baris) untuk jam kerja
+     * bersih tertentu, istirahat tiap hari dilewati. Boleh melewati tengah malam,
+     * dibatasi MAX_OVERNIGHT_MINUTES dari jam mulai.
+     */
     public static function selesaiDariDurasi(int $mulai, int $durasi): int
     {
-        if ($mulai >= self::BREAK_START && $mulai < self::BREAK_END) {
-            $mulai = self::BREAK_END;
+        $posisi = $mulai;
+        $sisa = $durasi;
+
+        while ($posisi - $mulai <= self::MAX_OVERNIGHT_MINUTES) {
+            $awalHari = intdiv($posisi, 1440) * 1440;
+            $istirahat = $awalHari + self::BREAK_START;
+
+            if ($posisi >= $istirahat && $posisi < $awalHari + self::BREAK_END) {
+                $posisi = $awalHari + self::BREAK_END;
+            }
+
+            $batas = $posisi < $istirahat ? $istirahat : $awalHari + 1440;
+
+            if ($sisa <= $batas - $posisi) {
+                return min($posisi + $sisa, $mulai + self::MAX_OVERNIGHT_MINUTES);
+            }
+
+            $sisa -= $batas - $posisi;
+            $posisi = $batas === $istirahat ? $awalHari + self::BREAK_END : $batas;
         }
 
-        $sebelumIstirahat = max(0, self::BREAK_START - $mulai);
+        return $mulai + self::MAX_OVERNIGHT_MINUTES;
+    }
 
-        $selesai = $durasi <= $sebelumIstirahat
-            ? $mulai + $durasi
-            : max($mulai, self::BREAK_END) + $durasi - $sebelumIstirahat;
+    /**
+     * Jam selesai mutlak untuk pasangan jam dinding, atau null kalau tidak masuk
+     * akal. Selesai yang lebih kecil dari mulai berarti hari berikutnya
+     * (22:00 → 06:00), asal tidak lebih dari MAX_OVERNIGHT_MINUTES; selesai yang
+     * sama dengan mulai tidak pernah sah.
+     */
+    public static function akhirMutlak(int $mulai, int $selesai): ?int
+    {
+        if ($selesai > $mulai) {
+            return $selesai;
+        }
 
-        return min(1440, $selesai);
+        $besok = $selesai + 1440;
+
+        return $selesai < $mulai && $besok - $mulai <= self::MAX_OVERNIGHT_MINUTES ? $besok : null;
     }
 
     /**
@@ -200,7 +245,7 @@ class ManualEntryBuilder
 
         if ($mulai === null || $selesai === null) {
             $problems[] = "Baris {$nomor}: jam mulai dan selesai harus diisi.";
-        } elseif ($selesai <= $mulai) {
+        } elseif (($selesai = self::akhirMutlak($mulai, $selesai)) === null) {
             $problems[] = "Baris {$nomor}: jam selesai harus setelah jam mulai.";
         } elseif (self::chunks($mulai, $selesai) === []) {
             $problems[] = "Baris {$nomor}: seluruhnya jam istirahat (12:00–13:00), tidak ada yang bisa dicatat.";
@@ -244,7 +289,10 @@ class ManualEntryBuilder
                 sheet: $lembur ? 'Overtime' : 'Daily',
                 cellRef: $bagian > 1 ? "Baris {$nomor} (".($ke + 1)."/{$bagian})" : "Baris {$nomor}",
                 slotLabel: $begin->format('H:i').'–'.$end->format('H:i'),
-                workDate: $tanggal,
+                // Tanggal tempat potongan ini MULAI, bukan tanggal baris: potongan
+                // sesudah tengah malam milik hari berikutnya, dan pratinjau harus
+                // menampilkan tanggal yang sama dengan yang diterima Kimai.
+                workDate: $begin->startOfDay(),
                 beginAt: $begin,
                 endAt: $end,
                 activityId: $activityId,

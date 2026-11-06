@@ -164,7 +164,9 @@ class ManualEntryBuilderTest extends TestCase
         $this->assertSame(720, ManualEntryBuilder::selesaiDariDurasi(540, 180));
         $this->assertSame(781, ManualEntryBuilder::selesaiDariDurasi(540, 181));
         $this->assertSame(840, ManualEntryBuilder::selesaiDariDurasi(750, 60));
-        $this->assertSame(1440, ManualEntryBuilder::selesaiDariDurasi(1380, 180));
+        // Boleh lewat tengah malam: 23:00 + 3 jam = 02:00 hari berikutnya.
+        $this->assertSame(1560, ManualEntryBuilder::selesaiDariDurasi(1380, 180));
+        $this->assertSame(1800, ManualEntryBuilder::selesaiDariDurasi(1320, 480));
 
         foreach ([[540, 480], [540, 180], [600, 90], [1140, 300]] as [$mulai, $durasi]) {
             $this->assertSame($durasi, ManualEntryBuilder::netMinutes($mulai, ManualEntryBuilder::selesaiDariDurasi($mulai, $durasi)));
@@ -179,6 +181,59 @@ class ManualEntryBuilderTest extends TestCase
             $this->fail('Baris yang seluruhnya istirahat mestinya ditolak.');
         } catch (InvalidManualInput $e) {
             $this->assertSame(['Baris 1: seluruhnya jam istirahat (12:00–13:00), tidak ada yang bisa dicatat.'], $e->problems);
+        }
+    }
+
+    #[Test]
+    public function lembur_lewat_tengah_malam_satu_baris_dipecah_di_tengah_malam(): void
+    {
+        $book = (new ManualEntryBuilder)->build(
+            [$this->baris(['mulai' => '22:00', 'selesai' => '06:00', 'lembur' => true])],
+            105,
+        );
+
+        $this->assertSame(['22:00–00:00', '00:00–04:00', '04:00–06:00'], $this->jam($book->entries));
+        $this->assertSame(480, $book->totalMinutes());
+
+        // Tanggal tiap potongan = tanggal tempat ia mulai, sama dengan yang diterima Kimai.
+        $this->assertSame(
+            ['2026-09-22', '2026-09-23', '2026-09-23'],
+            array_map(fn (ParsedEntry $e) => $e->workDate->toDateString(), $book->entries),
+        );
+        $this->assertSame('2026-09-23T06:00:00+0700', $book->entries[2]->toKimaiPayload(105)['end']);
+        $this->assertSame('Overtime', $book->entries[1]->sheet);
+    }
+
+    #[Test]
+    public function jam_istirahat_dilewati_di_hari_kedua_juga(): void
+    {
+        // 22:00 sampai 14:00 esok harinya (16 jam): istirahat 12:00–13:00 hari kedua dibuang.
+        $this->assertSame(
+            [[1320, 1440], [1440, 1680], [1680, 1920], [1920, 2160], [2220, 2460], [2460, 2520]],
+            ManualEntryBuilder::chunks(1320, 2520),
+        );
+    }
+
+    #[Test]
+    public function selesai_lebih_kecil_dari_mulai_hanya_sah_sampai_enam_belas_jam(): void
+    {
+        $this->assertSame(1800, ManualEntryBuilder::akhirMutlak(1320, 360));
+        $this->assertSame(1500, ManualEntryBuilder::akhirMutlak(1320, 60));
+        $this->assertNull(ManualEntryBuilder::akhirMutlak(540, 480), '09:00 → 08:00 esok = 23 jam, pasti salah ketik.');
+        $this->assertNull(ManualEntryBuilder::akhirMutlak(540, 540), 'Mulai sama dengan selesai tidak sah.');
+    }
+
+    #[Test]
+    public function baris_lembur_malam_bertumpukan_dengan_baris_di_tanggal_berikutnya_ditolak(): void
+    {
+        try {
+            (new ManualEntryBuilder)->build([
+                $this->baris(['mulai' => '22:00', 'selesai' => '06:00', 'lembur' => true]),
+                $this->baris(['tanggal' => '2026-09-23', 'mulai' => '05:00', 'selesai' => '07:00']),
+            ], 105);
+            $this->fail('Baris yang menempati jam di tanggal berikutnya mestinya ditolak.');
+        } catch (InvalidManualInput $e) {
+            $this->assertStringContainsString('Baris 2 bertumpukan jamnya dengan baris 1', $e->problems[0]);
         }
     }
 }

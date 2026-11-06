@@ -255,6 +255,43 @@ class IsiTimesheetPageTest extends TestCase
     }
 
     #[Test]
+    public function lembur_lewat_tengah_malam_cukup_satu_baris(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        // Durasi mengisi Selesai di hari berikutnya, dan Selesai mengisi Durasi.
+        $halaman = $this->halaman([$this->baris('2026-09-22', '22:00', '')])
+            ->set('data.rows.baris-0.durasi', '8:00')
+            ->assertSet('data.rows.baris-0.selesai', '06:00')
+            ->assertSee('22:00–06:00 (8j)')
+            ->set('data.rows.baris-0.selesai', '04:00')
+            ->assertSet('data.rows.baris-0.durasi', '6:00')
+            ->set('data.rows.baris-0.selesai', '06:00')
+            ->set('data.rows.baris-0.deskripsi', 'Hotfix rilis malam')
+            ->set('data.rows.baris-0.lembur', true)
+            ->call('periksa')
+            ->assertHasNoErrors();
+
+        $entries = TimesheetUpload::query()->sole()->entries()->orderBy('begin_at')->get();
+
+        $this->assertCount(3, $entries);
+        $this->assertSame(
+            ['2026-09-22', '2026-09-23', '2026-09-23'],
+            $entries->map(fn ($e) => $e->work_date->toDateString())->all(),
+        );
+
+        // Dibatalkan lalu dipulihkan: baris kembali sebagai SATU baris 22:00 → 06:00.
+        $halaman->callAction('batalkan');
+        $upload = TimesheetUpload::query()->sole();
+
+        $halaman->callAction('pulihkan', arguments: ['upload' => $upload->id]);
+        $rows = array_values($halaman->get('data.rows'));
+
+        $this->assertCount(1, $rows);
+        $this->assertSame(['2026-09-22', '22:00', '06:00', '8:00'], [$rows[0]['tanggal'], $rows[0]['mulai'], $rows[0]['selesai'], $rows[0]['durasi']]);
+    }
+
+    #[Test]
     public function judul_kartu_merangkum_isi_baris(): void
     {
         $this->actingAs($this->kimaiUser());
