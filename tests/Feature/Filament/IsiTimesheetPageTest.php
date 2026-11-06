@@ -74,7 +74,7 @@ class IsiTimesheetPageTest extends TestCase
     }
 
     #[Test]
-    public function dua_hari_penuh_menjadi_draf_berisi_potongan_dua_jam_tanpa_mengirim(): void
+    public function dua_hari_penuh_menjadi_draf_berisi_potongan_empat_jam_tanpa_mengirim(): void
     {
         $this->actingAs($this->kimaiUser());
 
@@ -88,9 +88,9 @@ class IsiTimesheetPageTest extends TestCase
         $this->assertSame(TimesheetUpload::SOURCE_FORM, $upload->source);
         $this->assertSame(UploadStatus::Draft, $upload->status);
         $this->assertSame(105, $upload->project_id);
-        $this->assertSame(10, $upload->count_parsed);
-        $this->assertSame(10, $upload->pendingEntries()->count());
-        $this->assertLessThanOrEqual(120, $upload->entries()->max('duration_minutes'));
+        $this->assertSame(6, $upload->count_parsed);
+        $this->assertSame(6, $upload->pendingEntries()->count());
+        $this->assertLessThanOrEqual(240, $upload->entries()->max('duration_minutes'));
         $this->assertSame('31_DEV_FEATURE', $upload->entries()->first()->activity_name);
         $this->assertSame([], $this->kimaiPostBodies());
     }
@@ -101,7 +101,7 @@ class IsiTimesheetPageTest extends TestCase
         $this->fakeKimai([$this->kimaiSlot(700001, '2026-09-22', '09:00', '11:00', ['tags' => []])]);
         $this->actingAs($this->kimaiUser());
 
-        $this->halaman([$this->baris('2026-09-22', '09:00', '13:00')])->call('periksa');
+        $this->halaman([$this->baris('2026-09-22', '09:00', '15:00')])->call('periksa');
 
         $entries = TimesheetUpload::query()->sole()->entries()->orderBy('begin_at')->get();
 
@@ -182,7 +182,7 @@ class IsiTimesheetPageTest extends TestCase
 
         $page->call('periksa');
 
-        $this->assertSame(25, TimesheetUpload::query()->sole()->count_parsed);
+        $this->assertSame(15, TimesheetUpload::query()->sole()->count_parsed);
     }
 
     #[Test]
@@ -215,9 +215,9 @@ class IsiTimesheetPageTest extends TestCase
 
         $bodies = $this->kimaiPostBodies();
 
-        $this->assertCount(3, $bodies);
+        $this->assertCount(2, $bodies);
         $this->assertSame('2026-09-22T19:00:00+0700', $bodies[0]['begin']);
-        $this->assertSame('2026-09-23T00:00:00+0700', $bodies[2]['end']);
+        $this->assertSame('2026-09-23T00:00:00+0700', $bodies[1]['end']);
         $this->assertSame('Overtime', $bodies[0]['tags']);
     }
 
@@ -240,6 +240,18 @@ class IsiTimesheetPageTest extends TestCase
         $this->halaman([$this->baris('2026-09-22', '09:00', '')])
             ->set('data.rows.baris-0.durasi', '2:30')
             ->assertSet('data.rows.baris-0.selesai', '11:30');
+    }
+
+    #[Test]
+    public function durasi_adalah_jam_kerja_dan_melewati_istirahat(): void
+    {
+        $this->actingAs($this->kimaiUser());
+
+        $this->halaman([$this->baris('2026-09-22', '09:00', '')])
+            ->set('data.rows.baris-0.durasi', '8:00')
+            ->assertSet('data.rows.baris-0.selesai', '18:00')
+            ->set('data.rows.baris-0.selesai', '17:00')
+            ->assertSet('data.rows.baris-0.durasi', '7:00');
     }
 
     #[Test]
@@ -298,7 +310,7 @@ class IsiTimesheetPageTest extends TestCase
         $this->assertCount(3, $rows);
         $this->assertSame(
             [
-                ['2026-09-22', '09:00', '18:00', '9:00', 8, 'Development fitur A', false],
+                ['2026-09-22', '09:00', '18:00', '8:00', 8, 'Development fitur A', false],
                 ['2026-09-22', '19:00', '00:00', '5:00', 8, "Hotfix rilis\nmalam", true],
                 ['2026-09-23', '13:30', '15:15', '1:45', 8, 'Rapat sprint', false],
             ],

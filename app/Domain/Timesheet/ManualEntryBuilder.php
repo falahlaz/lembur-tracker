@@ -9,13 +9,17 @@ use Illuminate\Support\Str;
 use Throwable;
 
 /**
- * Baris isian halaman Isi Timesheet menjadi entri Kimai yang masing-masing ≤ 2 jam.
+ * Baris isian halaman Isi Timesheet menjadi entri Kimai yang masing-masing ≤ 4 jam.
  *
- * Kimai menolak timesheet yang lebih panjang dari 2 jam, dan itulah alasan halaman
- * ini ada: orang cukup menulis "09:00–18:00, Development" sekali, lalu pemecahannya
- * dikerjakan di sini — 09–11, 11–13, 13–15, 15–17, 17–18. Potongannya murni per
- * 2 jam dari jam mulai; jam istirahat tidak dipotong otomatis. Yang ingin
- * istirahatnya kosong menulisnya sebagai dua baris.
+ * Kimai menolak timesheet yang lebih panjang dari 4 jam ("Maximum 4:00 hours
+ * allowed", diuji langsung: 4:00 diterima, 4:01 ditolak), dan itulah alasan halaman
+ * ini ada: orang cukup menulis "09:00 selama 8 jam, Development" sekali, lalu
+ * pemecahannya dikerjakan di sini — 09–12, 13–17, 17–18.
+ *
+ * Istirahat 12:00–13:00 dilewati: jam itu tidak masuk entri mana pun, dan Durasi
+ * di form berarti jam kerja bersih. Kimai tidak bisa diberi `break` lewat API
+ * ("This form should not contain extra fields"), jadi satu-satunya cara
+ * mewujudkan istirahat adalah jeda kosong di antara dua entri.
  *
  * Hasilnya ParsedWorkbook yang sama dengan hasil membaca berkas, sehingga
  * pemeriksaan duplikat, pratinjau, dan pengirimannya tidak perlu tahu dari mana
@@ -24,7 +28,12 @@ use Throwable;
 class ManualEntryBuilder
 {
     /** Batas Kimai untuk satu timesheet. */
-    public const MAX_MINUTES = 120;
+    public const MAX_MINUTES = 240;
+
+    /** Istirahat siang, dalam menit sejak tengah malam: 12:00–13:00. */
+    public const BREAK_START = 720;
+
+    public const BREAK_END = 780;
 
     /**
      * @param  array<int|string, array<string, mixed>>  $rows  state repeater apa adanya
@@ -88,12 +97,57 @@ class ManualEntryBuilder
     }
 
     /**
-     * Berapa entri Kimai yang akan lahir dari rentang ini — dipakai ringkasan
-     * langsung di halaman, supaya angkanya persis sama dengan hasil build().
+     * Potongan entri Kimai untuk rentang jam dinding, sebagai [dari, sampai] dalam
+     * menit sejak tengah malam: istirahat 12:00–13:00 dibuang, sisanya dipotong
+     * per MAX_MINUTES dari awal tiap bagian. Satu-satunya tempat aturan ini hidup —
+     * build(), ringkasan, dan form semua memakainya, sehingga angkanya tidak bisa
+     * berbeda dari entri yang benar-benar terkirim.
+     *
+     * @return array<int, array{0: int, 1: int}>
      */
-    public static function pieces(int $minutes): int
+    public static function chunks(int $mulai, int $selesai): array
     {
-        return $minutes <= 0 ? 0 : (int) ceil($minutes / self::MAX_MINUTES);
+        $bagian = [];
+
+        if ($mulai < self::BREAK_START) {
+            $bagian[] = [$mulai, min($selesai, self::BREAK_START)];
+        }
+
+        if ($selesai > self::BREAK_END) {
+            $bagian[] = [max($mulai, self::BREAK_END), $selesai];
+        }
+
+        $out = [];
+
+        foreach ($bagian as [$dari, $sampai]) {
+            for (; $dari < $sampai; $dari += self::MAX_MINUTES) {
+                $out[] = [$dari, min($sampai, $dari + self::MAX_MINUTES)];
+            }
+        }
+
+        return $out;
+    }
+
+    /** Jam kerja bersih (menit) dari rentang jam dinding: selisihnya dikurangi istirahat. */
+    public static function netMinutes(int $mulai, int $selesai): int
+    {
+        return array_sum(array_map(fn (array $c) => $c[1] - $c[0], self::chunks($mulai, $selesai)));
+    }
+
+    /** Kebalikan netMinutes(): jam selesai untuk jam kerja bersih tertentu, istirahat dilewati. Maksimal 24:00. */
+    public static function selesaiDariDurasi(int $mulai, int $durasi): int
+    {
+        if ($mulai >= self::BREAK_START && $mulai < self::BREAK_END) {
+            $mulai = self::BREAK_END;
+        }
+
+        $sebelumIstirahat = max(0, self::BREAK_START - $mulai);
+
+        $selesai = $durasi <= $sebelumIstirahat
+            ? $mulai + $durasi
+            : max($mulai, self::BREAK_END) + $durasi - $sebelumIstirahat;
+
+        return min(1440, $selesai);
     }
 
     /**
@@ -148,6 +202,8 @@ class ManualEntryBuilder
             $problems[] = "Baris {$nomor}: jam mulai dan selesai harus diisi.";
         } elseif ($selesai <= $mulai) {
             $problems[] = "Baris {$nomor}: jam selesai harus setelah jam mulai.";
+        } elseif (self::chunks($mulai, $selesai) === []) {
+            $problems[] = "Baris {$nomor}: seluruhnya jam istirahat (12:00–13:00), tidak ada yang bisa dicatat.";
         }
 
         if ((int) ($row['activity_id'] ?? 0) <= 0) {
@@ -172,12 +228,11 @@ class ManualEntryBuilder
         $tag = $lembur ? $this->overtimeTag() : null;
         $activityId = (int) $row['activity_id'];
 
-        $bagian = self::pieces($selesai - $mulai);
+        $potongan = self::chunks($mulai, $selesai);
+        $bagian = count($potongan);
         $out = [];
 
-        for ($ke = 0, $dari = $mulai; $dari < $selesai; $ke++, $dari += self::MAX_MINUTES) {
-            $sampai = min($selesai, $dari + self::MAX_MINUTES);
-
+        foreach ($potongan as $ke => [$dari, $sampai]) {
             // Dirakit dari tengah malam DI ZONA KIMAI, seperti SlotLabel::anchor();
             // jam 24 jatuh di tengah malam hari berikutnya.
             $begin = $tanggal->addMinutes($dari);
@@ -245,7 +300,8 @@ class ManualEntryBuilder
             $rows[(string) Str::uuid()] = [
                 'tanggal' => $tanggal->toDateString(),
                 'mulai' => sprintf('%02d:%02d', intdiv($mulai, 60), $mulai % 60),
-                'durasi' => sprintf('%d:%02d', intdiv($selesai - $mulai, 60), ($selesai - $mulai) % 60),
+                // Jam kerja bersih = jumlah potongan; selisih jam dinding akan ikut menghitung istirahat.
+                'durasi' => sprintf('%d:%02d', intdiv($kerja = (int) collect($potongan)->sum('duration_minutes'), 60), $kerja % 60),
                 // Tengah malam ditulis 00:00; minuteOfDay(asEnd) membacanya kembali sebagai 24:00.
                 'selesai' => sprintf('%02d:%02d', intdiv($selesai, 60) % 24, $selesai % 60),
                 'activity_id' => $pertama->activity_id,
