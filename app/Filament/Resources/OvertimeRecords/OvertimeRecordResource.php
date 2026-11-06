@@ -2,6 +2,8 @@
 
 namespace App\Filament\Resources\OvertimeRecords;
 
+use App\Domain\Kimai\Exceptions\KimaiException;
+use App\Domain\Kimai\OvertimeKimaiWriter;
 use App\Filament\Resources\OvertimeRecords\Pages\CreateOvertimeRecord;
 use App\Filament\Resources\OvertimeRecords\Pages\EditOvertimeRecord;
 use App\Filament\Resources\OvertimeRecords\Pages\ListOvertimeRecords;
@@ -11,11 +13,14 @@ use App\Filament\Resources\OvertimeRecords\Schemas\OvertimeRecordInfolist;
 use App\Filament\Resources\OvertimeRecords\Tables\OvertimeRecordsTable;
 use App\Models\OvertimeRecord;
 use BackedEnum;
+use Filament\Actions\Action;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 
 class OvertimeRecordResource extends Resource
@@ -35,6 +40,27 @@ class OvertimeRecordResource extends Resource
     protected static ?string $navigationLabel = 'Lembur';
 
     protected static ?string $recordTitleAttribute = 'work_description';
+
+    /**
+     * Hapus di Kimai LEBIH DULU, sebelum catatan lokal. Kalau gagal, aksi dibatalkan
+     * dan tidak ada yang terhapus di app — app dan Kimai tidak boleh berbeda.
+     *
+     * @param  OvertimeRecord|Collection<int, OvertimeRecord>  $records
+     */
+    public static function hapusDiKimai(Action $action, OvertimeRecord|Collection $records): void
+    {
+        foreach ($records instanceof Collection ? $records : [$records] as $record) {
+            try {
+                app(OvertimeKimaiWriter::class)->delete($record);
+            } catch (KimaiException $e) {
+                Notification::make()->danger()->persistent()
+                    ->title('Gagal menghapus di Kimai, lembur tidak dihapus')
+                    ->body($e->userMessage())->send();
+
+                $action->halt();
+            }
+        }
+    }
 
     public static function form(Schema $schema): Schema
     {

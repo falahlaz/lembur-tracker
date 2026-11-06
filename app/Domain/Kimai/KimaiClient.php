@@ -119,6 +119,30 @@ class KimaiClient
     }
 
     /**
+     * Mengubah sebagian field satu entri timesheet (PATCH). Hanya kirim field yang
+     * memang berubah: field lain dibiarkan apa adanya di Kimai.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed> entri sesudah diubah
+     */
+    public function updateTimesheet(string $token, int $id, array $payload): array
+    {
+        $path = "/api/timesheets/{$id}";
+
+        try {
+            $response = $this->request($token)->patch($path, $payload);
+        } catch (ConnectionException) {
+            throw new KimaiUnavailable('Kimai tidak dapat dihubungi.');
+        }
+
+        $this->guard($response, $path, withDetail: true);
+
+        $body = $response->json();
+
+        return is_array($body) ? $body : [];
+    }
+
+    /**
      * Menghapus satu entri timesheet.
      *
      * 404 DIANGGAP BERHASIL, dan itu bukan kelonggaran: keadaan akhir yang

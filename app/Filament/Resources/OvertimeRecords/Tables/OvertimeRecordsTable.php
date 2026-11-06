@@ -6,6 +6,7 @@ use App\Domain\Lembur\DurationCalculator;
 use App\Enums\OvertimeStatus;
 use App\Enums\Source;
 use App\Enums\Tier;
+use App\Filament\Resources\OvertimeRecords\OvertimeRecordResource;
 use App\Models\OvertimeRecord;
 use App\Models\PayrollPeriod;
 use App\Support\Format;
@@ -24,6 +25,7 @@ use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Date;
 
 /** F-05 — history lembur: bisa difilter, dan setiap angka bisa ditelusuri. */
@@ -205,11 +207,13 @@ class OvertimeRecordsTable
             ->recordActions([
                 ViewAction::make(),
                 EditAction::make(),
-                DeleteAction::make(),
+                DeleteAction::make()
+                    ->before(fn (DeleteAction $action, OvertimeRecord $record) => OvertimeRecordResource::hapusDiKimai($action, $record)),
             ])
             ->toolbarActions([
                 BulkActionGroup::make([
-                    DeleteBulkAction::make(),
+                    DeleteBulkAction::make()
+                        ->before(fn (DeleteBulkAction $action, Collection $records) => OvertimeRecordResource::hapusDiKimai($action, $records)),
                 ]),
             ])
             ->emptyStateHeading('Belum ada lembur tercatat')

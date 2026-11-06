@@ -242,6 +242,12 @@ abstract class TestCase extends BaseTestCase
                     return $this->respondToKimaiDelete($request->url());
                 }
 
+                // PATCH juga cocok dengan glob di atas; tanpa cabang ini ia dijawab
+                // daftar entri dan terlihat "berhasil" tanpa mengubah apa pun.
+                if ($request->method() === 'PATCH') {
+                    return $this->respondToKimaiPatch($request->url(), $request->data());
+                }
+
                 if ($this->kimaiGetStatus !== null) {
                     return Http::response('', $this->kimaiGetStatus);
                 }
@@ -355,6 +361,39 @@ abstract class TestCase extends BaseTestCase
     protected function kimaiPostBodies(): array
     {
         return $this->kimaiPosts;
+    }
+
+    /** @var array<int, array{id: int, body: array<string, mixed>}> */
+    protected array $kimaiPatches = [];
+
+    /** Status HTTP yang dipaksakan untuk PATCH berikutnya; null = berhasil. */
+    protected ?int $kimaiPatchStatus = null;
+
+    /** @return array<int, array{id: int, body: array<string, mixed>}> */
+    protected function kimaiPatched(): array
+    {
+        return $this->kimaiPatches;
+    }
+
+    /**
+     * @param  array<string, mixed>  $body
+     * @return Response|PromiseInterface
+     */
+    private function respondToKimaiPatch(string $url, array $body)
+    {
+        $id = (int) basename((string) parse_url($url, PHP_URL_PATH));
+
+        $this->kimaiPatches[] = ['id' => $id, 'body' => $body];
+
+        if ($this->kimaiPatchStatus !== null) {
+            return Http::response('', $this->kimaiPatchStatus);
+        }
+
+        $entry = collect($this->kimaiEntries)->firstWhere('id', $id) ?? $this->kimaiEntry(['id' => $id]);
+        $merged = array_merge($entry, $body);
+        $merged['duration'] = Carbon::parse($merged['end'])->diffInSeconds(Carbon::parse($merged['begin']));
+
+        return Http::response($merged, 200);
     }
 
     /** @return array<int, int> */

@@ -2,12 +2,15 @@
 
 namespace App\Filament\Resources\OvertimeRecords\Pages;
 
+use App\Domain\Kimai\Exceptions\KimaiException;
+use App\Domain\Kimai\OvertimeKimaiWriter;
 use App\Filament\Resources\OvertimeRecords\OvertimeRecordResource;
 use App\Models\OvertimeRecord;
 use App\Support\Format;
 use Filament\Actions\DeleteAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
+use Illuminate\Database\Eloquent\Model;
 
 class EditOvertimeRecord extends EditRecord
 {
@@ -22,12 +25,29 @@ class EditOvertimeRecord extends EditRecord
     {
         return [
             DeleteAction::make()
+                ->before(fn (DeleteAction $action, OvertimeRecord $record) => OvertimeRecordResource::hapusDiKimai($action, $record))
                 // F-02 — menghapus hanya boleh bila saldonya belum terpakai.
                 ->modalDescription(fn (OvertimeRecord $record) => $record->leaveBalance
                     && ($record->leaveBalance->held_minutes > 0 || $record->leaveBalance->consumed_minutes > 0)
                         ? 'Saldo dari lembur ini sudah dipakai klaim. Gunakan status "Ditolak" supaya jejaknya tetap ada.'
                         : 'Catatan ini akan dihapus beserta saldo cuti pengganti yang dihasilkannya.'),
         ];
+    }
+
+    /** Ubahan yang punya padanan di Kimai diterapkan ke Kimai lebih dulu; gagal = tidak ada yang tersimpan. */
+    protected function handleRecordUpdate(Model $record, array $data): Model
+    {
+        try {
+            app(OvertimeKimaiWriter::class)->push($record, $data);
+        } catch (KimaiException $e) {
+            Notification::make()->danger()->persistent()
+                ->title('Perubahan belum tersimpan, Kimai tidak berhasil diubah')
+                ->body($e->userMessage())->send();
+
+            $this->halt();
+        }
+
+        return parent::handleRecordUpdate($record, $data);
     }
 
     /**
