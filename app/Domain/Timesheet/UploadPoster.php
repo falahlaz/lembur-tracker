@@ -160,6 +160,14 @@ class UploadPoster
         }
 
         SyncKimaiTimesheets::markPending($upload->user);
-        SyncKimaiTimesheets::dispatch($upload->user);
+
+        // Rentang upload, bukan watermark: watermark sudah maju ke hari ini, jadi
+        // entri bertanggal mundur (backfill, hari Minggu lalu) jatuh di luar
+        // jendelanya dan lemburnya tidak pernah terbentuk.
+        SyncKimaiTimesheets::dispatch(
+            $upload->user,
+            $upload->range_start?->toDateString(),
+            $upload->range_end?->toDateString(),
+        );
     }
 }
