@@ -348,9 +348,13 @@ class TimesheetUploadTest extends TestCase
     {
         Queue::fake();
 
-        $this->kirim($this->draft());
+        $upload = $this->kirim($this->draft());
 
-        Queue::assertPushed(SyncKimaiTimesheets::class);
+        // Rentangnya milik upload: entri bertanggal mundur harus ikut tertarik walau
+        // watermark sync sudah melewati tanggalnya.
+        $this->assertNotNull($upload->range_start);
+        Queue::assertPushed(SyncKimaiTimesheets::class, fn (SyncKimaiTimesheets $job) => $job->from === $upload->range_start->toDateString()
+            && $job->to === $upload->range_end->toDateString());
     }
 
     #[Test]
