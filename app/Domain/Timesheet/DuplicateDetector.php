@@ -33,10 +33,6 @@ class DuplicateDetector
             return DuplicateCheckResult::checked(0, 0);
         }
 
-        // Didahulukan karena gratis dan tidak bisa gagal: kalau Kimai sedang tidak
-        // terjangkau, ini tetap menangkap pengiriman ulang berkas yang sama.
-        $local = $this->markPreviouslyPosted($user, $entries);
-
         $range = $this->range($book);
 
         try {
@@ -52,10 +48,14 @@ class DuplicateDetector
                 onlyStopped: false,
             );
         } catch (KimaiException $e) {
-            return DuplicateCheckResult::unavailable($e->userMessage(), $local);
+            // Cadangan: catatan lokal hanya dipercaya saat Kimai tidak terjangkau.
+            // Saat Kimai menjawab, dialah sumber kebenaran — entri yang sudah
+            // dihapus di sana atau di app tidak boleh terus memblokir slotnya,
+            // dan entri yang masih ada tertangkap persis oleh markAgainstKimai().
+            return DuplicateCheckResult::unavailable($e->userMessage(), $this->markPreviouslyPosted($user, $entries));
         }
 
-        return DuplicateCheckResult::checked($this->markAgainstKimai($entries, $existing), $local);
+        return DuplicateCheckResult::checked($this->markAgainstKimai($entries, $existing), 0);
     }
 
     /**
